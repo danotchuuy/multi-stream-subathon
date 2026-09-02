@@ -20,6 +20,20 @@ profile.cov
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
+# Build output
+/bin/
+
+# Local SQLite database (default DB_PATH; see internal/config)
+/data/
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend (has its own .gitignore for node_modules/dist, listed here too
+# for clarity when browsing the repo root)
+frontend/node_modules/
+frontend/dist/
+
 # Go workspace file
 go.work
 go.work.sum
