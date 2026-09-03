@@ -15,6 +15,9 @@ import (
 	"github.com/danotchuuy/multi-stream-subathon/internal/auth"
 	"github.com/danotchuuy/multi-stream-subathon/internal/config"
 	"github.com/danotchuuy/multi-stream-subathon/internal/oauth"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/kick"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/streamelements"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/twitch"
 	"github.com/danotchuuy/multi-stream-subathon/internal/server"
 	"github.com/danotchuuy/multi-stream-subathon/internal/sqlite"
 	"github.com/danotchuuy/multi-stream-subathon/internal/subathon"
@@ -50,16 +53,49 @@ func main() {
 	}
 	states := oauth.NewStateStore()
 
+	var twitchClient *twitch.Client
+	if cfg.Twitch.ClientID != "" && cfg.TwitchWebhookSecret != "" {
+		twitchClient = twitch.New(twitch.Config{
+			ClientID:      cfg.Twitch.ClientID,
+			ClientSecret:  cfg.Twitch.ClientSecret,
+			WebhookSecret: cfg.TwitchWebhookSecret,
+			CallbackURL:   cfg.TwitchWebhookCallbackURL,
+		})
+	} else {
+		log.Println("TWITCH_WEBHOOK_SECRET not set; live Twitch sub/bits events are disabled (reward rules still work for manual events)")
+	}
+
+	var kickClient *kick.Client
+	if cfg.Kick.ClientID != "" {
+		kickClient = kick.New(kick.Config{
+			ClientID:     cfg.Kick.ClientID,
+			ClientSecret: cfg.Kick.ClientSecret,
+		})
+	} else {
+		log.Println("KICK_CLIENT_ID not set; live Kick sub events are disabled (reward rules still work for manual events)")
+	}
+
 	hub := ws.NewHub()
 
+	// Unlike Twitch/Kick, StreamElements has no server-level app
+	// credential — every timer owner supplies their own account's JWT
+	// token — so this is always constructed and started, no env var gate.
+	streamElementsClient := streamelements.NewClient()
+	streamElementsPoller := streamelements.NewPoller(streamElementsClient, hub)
+	streamElementsPoller.StartAll(manager)
+
 	router := server.New(server.Deps{
-		Manager:        manager,
-		Hub:            hub,
-		Auth:           authService,
-		OAuthProviders: providers,
-		OAuthStates:    states,
-		AllowedOrigin:  cfg.AllowedOrigin,
-		CookieSecure:   cfg.CookieSecure,
+		Manager:              manager,
+		Hub:                  hub,
+		Auth:                 authService,
+		OAuthProviders:       providers,
+		OAuthStates:          states,
+		Twitch:               twitchClient,
+		Kick:                 kickClient,
+		StreamElements:       streamElementsClient,
+		StreamElementsPoller: streamElementsPoller,
+		AllowedOrigin:        cfg.AllowedOrigin,
+		CookieSecure:         cfg.CookieSecure,
 	})
 	httpServer := &http.Server{
 		Addr:    cfg.Addr,
@@ -73,8 +109,9 @@ func main() {
 	// countdown updates smoothly even between events.
 	go broadcastLoop(ctx, manager, hub)
 
-	// Bound memory from abandoned OAuth flows and expired sessions.
-	go cleanupLoop(ctx, states, repo)
+	// Bound memory from abandoned OAuth flows, expired sessions, and (if
+	// configured) each platform's webhook notification dedupe set.
+	go cleanupLoop(ctx, states, repo, twitchClient, kickClient)
 
 	go func() {
 		log.Printf("subathon server listening on %s (db: %s)", cfg.Addr, cfg.DBPath)
@@ -109,7 +146,7 @@ func broadcastLoop(ctx context.Context, manager *subathon.Manager, hub *ws.Hub) 
 	}
 }
 
-func cleanupLoop(ctx context.Context, states *oauth.StateStore, repo *sqlite.Repo) {
+func cleanupLoop(ctx context.Context, states *oauth.StateStore, repo *sqlite.Repo, twitchClient *twitch.Client, kickClient *kick.Client) {
 	ticker := time.NewTicker(5 * time.Minute)
 	defer ticker.Stop()
 
@@ -121,6 +158,12 @@ func cleanupLoop(ctx context.Context, states *oauth.StateStore, repo *sqlite.Rep
 			states.Sweep()
 			if err := repo.DeleteExpiredSessions(); err != nil {
 				log.Printf("cleanup: delete expired sessions: %v", err)
+			}
+			if twitchClient != nil {
+				twitchClient.Sweep()
+			}
+			if kickClient != nil {
+				kickClient.Sweep()
 			}
 		}
 	}

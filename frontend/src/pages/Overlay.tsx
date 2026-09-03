@@ -1,7 +1,8 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
-import { formatDuration } from '../lib/format'
+import { formatDuration, formatMoney } from '../lib/format'
+import { DEFAULT_OVERLAY_COLORS } from '../lib/overlayColors'
 
 /**
  * Minimal, transparent-background view meant to be added as an OBS
@@ -31,10 +32,38 @@ export default function Overlay() {
     )
   }
 
+  // Hidden (see Timer.SetHidden / the dashboard's Hide button / a
+  // channel moderator's "!timer hide" chat command) means render nothing
+  // at all, not just a blank clock — this is meant to actually disappear
+  // from the stream.
+  if (snapshot?.hidden) {
+    return <div className="overlay" />
+  }
+
+  const colors = snapshot?.overlayColors ?? DEFAULT_OVERLAY_COLORS
+
   return (
     <div className="overlay">
-      <div className="overlay-clock">
-        {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+      <div className="overlay-pill-group">
+        {snapshot?.moneyGoal ? (
+          <div
+            className="overlay-pill"
+            style={{ background: colors.moneyBg, color: colors.moneyText }}
+          >
+            <span className="overlay-money-label">
+              ${formatMoney(snapshot.totalMoneyRaised)} / $
+              {formatMoney(snapshot.moneyGoal)}
+            </span>
+          </div>
+        ) : null}
+        <div
+          className="overlay-pill"
+          style={{ background: colors.timerBg, color: colors.timerText }}
+        >
+          <span className="overlay-clock">
+            {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+          </span>
+        </div>
       </div>
     </div>
   )

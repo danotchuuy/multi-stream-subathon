@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { getAuthProviders } from '../lib/api'
+import { getAuthProviders, HttpError, unlinkIdentity } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import type { AuthPlatform } from '../types'
 
@@ -21,9 +21,11 @@ const ERROR_MESSAGES: Record<string, string> = {
 }
 
 export default function Account() {
-  const { user, logout } = useAuth()
+  const { user, refresh, logout } = useAuth()
   const [providers, setProviders] = useState<string[] | null>(null)
   const [params] = useSearchParams()
+  const [unlinking, setUnlinking] = useState<AuthPlatform | null>(null)
+  const [unlinkError, setUnlinkError] = useState<string | null>(null)
 
   useEffect(() => {
     getAuthProviders()
@@ -36,6 +38,23 @@ export default function Account() {
   const error = params.get('error')
   const linkedPlatforms = new Set(user.identities.map((i) => i.platform))
   const linkable = LINKABLE_PLATFORMS.filter((p) => !linkedPlatforms.has(p))
+
+  const handleUnlink = async (platform: AuthPlatform) => {
+    setUnlinking(platform)
+    setUnlinkError(null)
+    try {
+      await unlinkIdentity(platform)
+      refresh()
+    } catch (err) {
+      setUnlinkError(
+        err instanceof HttpError && err.message
+          ? err.message
+          : `Failed to unlink ${PROVIDER_LABELS[platform]}. Please try again.`,
+      )
+    } finally {
+      setUnlinking(null)
+    }
+  }
 
   return (
     <div className="dashboard">
@@ -59,11 +78,19 @@ export default function Account() {
 
       <section className="events">
         <h2>Linked platforms</h2>
+        {unlinkError && <p className="error-message">{unlinkError}</p>}
         <ul>
           {user.identities.map((i) => (
             <li key={i.platform}>
               <span className="platform">{i.platform}</span>
               <span>{i.username}</span>
+              <button
+                type="button"
+                onClick={() => handleUnlink(i.platform)}
+                disabled={unlinking !== null}
+              >
+                {unlinking === i.platform ? 'Unlinking…' : 'Unlink'}
+              </button>
             </li>
           ))}
         </ul>

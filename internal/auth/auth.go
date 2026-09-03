@@ -66,9 +66,11 @@ type Repo interface {
 	GetUser(id string) (User, bool, error)
 
 	FindIdentity(platform Platform, platformUserID string) (Identity, bool, error)
+	FindIdentityByUsername(platform Platform, username string) (Identity, bool, error)
 	CreateIdentity(i Identity) error
 	UpdateIdentityTokens(identityID, accessToken, refreshToken string, expiresAt time.Time) error
 	ListIdentities(userID string) ([]Identity, error)
+	DeleteIdentity(identityID string) error
 
 	CreateSession(s Session) error
 	GetSession(tokenHash string) (Session, bool, error)
@@ -79,6 +81,15 @@ type Repo interface {
 // ErrIdentityLinkedElsewhere is returned by LinkIdentity when the platform
 // account is already linked to a different user.
 var ErrIdentityLinkedElsewhere = errors.New("this platform account is already linked to a different user")
+
+// ErrIdentityNotLinked is returned by UnlinkIdentity when the account has
+// no identity on the given platform to unlink.
+var ErrIdentityNotLinked = errors.New("that platform is not linked to this account")
+
+// ErrLastIdentity is returned by UnlinkIdentity when it's asked to remove
+// an account's only linked identity — since there's no other way to log
+// back in (no password auth), that would lock the account out entirely.
+var ErrLastIdentity = errors.New("cannot unlink your only linked platform account")
 
 const sessionTTL = 30 * 24 * time.Hour
 
@@ -176,9 +187,62 @@ func (s *Service) Identities(userID string) ([]Identity, error) {
 	return s.repo.ListIdentities(userID)
 }
 
+// UnlinkIdentity removes userID's identity on platform, e.g. from an
+// "unlink Twitch" button on the account page. Refuses with
+// ErrLastIdentity if it's their only linked identity — there's no
+// password auth to fall back on, so that would lock them out — and with
+// ErrIdentityNotLinked if that platform isn't linked to begin with.
+func (s *Service) UnlinkIdentity(userID string, platform Platform) error {
+	identities, err := s.repo.ListIdentities(userID)
+	if err != nil {
+		return fmt.Errorf("list identities: %w", err)
+	}
+
+	var target *Identity
+	for i := range identities {
+		if identities[i].Platform == platform {
+			target = &identities[i]
+			break
+		}
+	}
+	if target == nil {
+		return ErrIdentityNotLinked
+	}
+	if len(identities) <= 1 {
+		return ErrLastIdentity
+	}
+
+	if err := s.repo.DeleteIdentity(target.ID); err != nil {
+		return fmt.Errorf("delete identity: %w", err)
+	}
+	return nil
+}
+
 // GetUser looks up a user by ID.
 func (s *Service) GetUser(id string) (User, bool, error) {
 	return s.repo.GetUser(id)
+}
+
+// twitchAndKick is the platforms UserByUsername searches — YouTube has no
+// login provider yet (see internal/oauth), so no identity can ever exist
+// for it.
+var twitchAndKick = []Platform{PlatformTwitch, PlatformKick}
+
+// UserByUsername finds the account with username linked on Twitch or Kick
+// (case-insensitive), e.g. resolving what a timer owner types into "add
+// moderator by username." ok is false if no linked identity matches —
+// never an error on its own.
+func (s *Service) UserByUsername(username string) (user User, ok bool, err error) {
+	for _, platform := range twitchAndKick {
+		ident, found, err := s.repo.FindIdentityByUsername(platform, username)
+		if err != nil {
+			return User{}, false, fmt.Errorf("find identity on %s: %w", platform, err)
+		}
+		if found {
+			return s.repo.GetUser(ident.UserID)
+		}
+	}
+	return User{}, false, nil
 }
 
 // CreateSession issues a new session for userID and returns the raw token

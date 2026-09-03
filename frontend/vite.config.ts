@@ -24,6 +24,15 @@ export default defineConfig({
         target: 'ws://localhost:8090',
         ws: true,
       },
+      // Twitch/Kick EventSub webhook deliveries — without this, they hit
+      // this dev server's own SPA fallback (a 404, no route matches) and
+      // never reach the Go backend at all, silently killing subs/gifts/
+      // bits/Kicks: Twitch's subscriptions get stuck in
+      // "webhook_callback_verification_failed" (the verification
+      // challenge never reaches handleTwitchWebhook to echo back) and
+      // Kick's deliveries just vanish (no verification step, same dead
+      // end).
+      '/webhooks': 'http://localhost:8090',
     },
   },
 })

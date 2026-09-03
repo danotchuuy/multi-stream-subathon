@@ -9,10 +9,11 @@ import (
 type Platform string
 
 const (
-	PlatformKick    Platform = "kick"
-	PlatformYouTube Platform = "youtube"
-	PlatformTwitch  Platform = "twitch"
-	PlatformManual  Platform = "manual"
+	PlatformKick           Platform = "kick"
+	PlatformYouTube        Platform = "youtube"
+	PlatformTwitch         Platform = "twitch"
+	PlatformStreamElements Platform = "streamelements"
+	PlatformManual         Platform = "manual"
 )
 
 // EventType identifies what kind of action added time to the clock.
@@ -35,8 +36,13 @@ type Event struct {
 	Type         EventType `json:"type"`
 	Username     string    `json:"username"`
 	SecondsAdded int       `json:"secondsAdded"`
-	Amount       float64   `json:"amount,omitempty"` // e.g. donation amount or bits count
-	Occurred     time.Time `json:"occurred"`
+	// MoneyAdded is how many dollars this event counted toward the
+	// timer's money goal, per MoneyRules — independent of SecondsAdded,
+	// since a timer may track time, money, both, or (with every rate set
+	// to 0) neither.
+	MoneyAdded float64   `json:"moneyAdded,omitempty"`
+	Amount     float64   `json:"amount,omitempty"` // e.g. donation amount or bits count
+	Occurred   time.Time `json:"occurred"`
 }
 
 // NormalizeUsername canonicalizes a contributor's username so the same

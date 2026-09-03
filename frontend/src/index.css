@@ -86,6 +86,12 @@ a {
   color: var(--accent);
 }
 
+.header-links {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .overlay-link {
   margin-top: 16px;
 }
@@ -175,6 +181,53 @@ a {
   font-size: 14px;
 }
 
+.money-progress {
+  margin-top: 16px;
+}
+
+.milestone-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.milestone-progress-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.milestone-progress-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+.milestone-progress-list li.milestone-reached {
+  color: var(--text);
+}
+
+.milestone-progress-list .status {
+  min-width: 52px;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.milestone-hidden-tag {
+  font-size: 11px;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+
 .error-message {
   margin-top: 16px;
   padding: 10px 14px;
@@ -255,6 +308,42 @@ a {
   color: var(--text-dim);
 }
 
+.control-group .checkbox-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-group-stacked {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.control-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.control-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  max-width: 220px;
+}
+
+.control-toggle .status {
+  white-space: nowrap;
+}
+
+.control-hint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.3;
+}
+
 .events {
   margin-top: 24px;
 }
@@ -293,6 +382,86 @@ a {
   color: var(--text-dim);
 }
 
+/* Reward settings table */
+
+.reward-table-wrap {
+  margin-top: 16px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.reward-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+}
+
+.reward-table th,
+.reward-table td {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+/* A table header that's clickable to sort, without looking like a boxed
+   button. */
+.sort-header {
+  border: none;
+  background: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+}
+
+.sort-header:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: transparent;
+}
+
+/* A clickable table row that's currently selected/filtered on, e.g. a
+   contributor picked to filter the history table below. */
+.selected-row {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+/* A button that should read as an inline text link (e.g. a username
+   that filters the table when clicked), not a boxed button. */
+.link-button {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+}
+
+.link-button:hover:not(:disabled) {
+  border-color: transparent;
+  opacity: 0.8;
+}
+
+.reward-table thead th {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.reward-table tbody th {
+  font-weight: 500;
+}
+
+.reward-table tbody tr:last-child th,
+.reward-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.reward-table input {
+  width: 90px;
+}
+
 footer {
   margin-top: 32px;
   color: var(--text-dim);
@@ -309,12 +478,88 @@ footer {
   height: 100vh;
 }
 
-.overlay-clock {
-  font-size: 96px;
+.overlay-pill-group {
+  display: flex;
+  flex-direction: row;
+  border-radius: 999px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+
+.overlay-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 14px 32px;
+}
+
+.overlay-clock,
+.overlay-money-label {
+  font-size: 28px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: #fff;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.8);
+}
+
+.overlay-goals-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.overlay-goal-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 24px 8px 8px;
+  border-radius: 999px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.overlay-goal-amount-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6em;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.overlay-goal-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1em;
+}
+
+.overlay-goal-pulsing-dots {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 5px;
+}
+
+.overlay-goal-pulsing-dots span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.3;
+  animation: overlay-goal-dot-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes overlay-goal-dot-pulse {
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
 }
 
 .overlay-error {

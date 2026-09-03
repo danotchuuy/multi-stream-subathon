@@ -16,6 +16,9 @@ type Summary struct {
 	Name          string `json:"name"`
 	Running       bool   `json:"running"`
 	RemainingSecs int    `json:"remainingSecs"`
+	// Owner is true if the user this Summary was built for owns the
+	// timer, false if they only moderate it (see Timer.AddModerator).
+	Owner bool `json:"owner"`
 }
 
 // Manager owns every Timer this server knows about, keyed by ID, and keeps
@@ -41,19 +44,25 @@ func NewManager(repo Repo) (*Manager, error) {
 			return nil, fmt.Errorf("load events for timer %s: %w", rec.ID, err)
 		}
 		reverse(events) // RecentEvents is newest-first; Timer keeps oldest-first
-		m.timers[rec.ID] = newTimer(repo, rec, events)
+		moderatorIDs, err := repo.ListModerators(rec.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load moderators for timer %s: %w", rec.ID, err)
+		}
+		m.timers[rec.ID] = newTimer(repo, rec, events, moderatorIDs)
 	}
 	return m, nil
 }
 
-// List returns userID's timers as Summaries, sorted by name.
+// List returns every timer userID owns or moderates, as Summaries sorted
+// by name.
 func (m *Manager) List(userID string) []Summary {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	summaries := make([]Summary, 0, len(m.timers))
 	for _, t := range m.timers {
-		if t.UserID() != userID {
+		owner := t.UserID() == userID
+		if !owner && !t.IsModerator(userID) {
 			continue
 		}
 		snap := t.Snapshot()
@@ -62,6 +71,7 @@ func (m *Manager) List(userID string) []Summary {
 			Name:          snap.Name,
 			Running:       snap.Running,
 			RemainingSecs: snap.RemainingSecs,
+			Owner:         owner,
 		})
 	}
 	sort.Slice(summaries, func(i, j int) bool { return summaries[i].Name < summaries[j].Name })
@@ -101,13 +111,66 @@ func (m *Manager) Create(userID, name string) (*Timer, error) {
 		return nil, fmt.Errorf("create timer: %w", err)
 	}
 
-	t := newTimer(m.repo, rec, nil)
+	t := newTimer(m.repo, rec, nil, nil)
 
 	m.mu.Lock()
 	m.timers[rec.ID] = t
 	m.mu.Unlock()
 
 	return t, nil
+}
+
+// RunningByTwitchChannel returns every currently-running timer configured
+// to watch the given Twitch broadcaster ID (see Timer.SetTwitchChannel),
+// for translating an incoming EventSub notification into the timer(s) it
+// should add time to.
+func (m *Manager) RunningByTwitchChannel(broadcasterID string) []*Timer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var timers []*Timer
+	for _, t := range m.timers {
+		id, _ := t.TwitchChannel()
+		if id == broadcasterID && t.Snapshot().Running {
+			timers = append(timers, t)
+		}
+	}
+	return timers
+}
+
+// RunningByKickChannel is RunningByTwitchChannel's Kick equivalent (see
+// Timer.SetKickChannel).
+func (m *Manager) RunningByKickChannel(broadcasterID string) []*Timer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var timers []*Timer
+	for _, t := range m.timers {
+		id, _ := t.KickChannel()
+		if id == broadcasterID && t.Snapshot().Running {
+			timers = append(timers, t)
+		}
+	}
+	return timers
+}
+
+// TimersByTwitchChannel returns every timer — running or not — configured
+// to watch the given Twitch broadcaster ID. Unlike RunningByTwitchChannel
+// (used for contribution events, which shouldn't extend a timer nobody's
+// running), chat commands like "!timer unpause" specifically need to
+// reach a *stopped* timer too.
+func (m *Manager) TimersByTwitchChannel(broadcasterID string) []*Timer {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var timers []*Timer
+	for _, t := range m.timers {
+		id, _ := t.TwitchChannel()
+		if id == broadcasterID {
+			timers = append(timers, t)
+		}
+	}
+	return timers
 }
 
 func reverse(events []Event) {

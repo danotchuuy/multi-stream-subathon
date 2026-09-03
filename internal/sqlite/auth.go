@@ -51,6 +51,23 @@ func (r *Repo) FindIdentity(platform auth.Platform, platformUserID string) (auth
 	return ident, true, nil
 }
 
+func (r *Repo) FindIdentityByUsername(platform auth.Platform, username string) (auth.Identity, bool, error) {
+	row := r.db.QueryRow(`
+		SELECT id, user_id, platform, platform_user_id, platform_username, access_token, refresh_token, token_expires_at, created_at, updated_at
+		FROM identities
+		WHERE platform = ? AND platform_username = ? COLLATE NOCASE`,
+		string(platform), username)
+
+	ident, err := scanIdentity(row)
+	if err == sql.ErrNoRows {
+		return auth.Identity{}, false, nil
+	}
+	if err != nil {
+		return auth.Identity{}, false, fmt.Errorf("query identity by username: %w", err)
+	}
+	return ident, true, nil
+}
+
 func (r *Repo) CreateIdentity(i auth.Identity) error {
 	_, err := r.db.Exec(
 		`INSERT INTO identities (id, user_id, platform, platform_user_id, platform_username, access_token, refresh_token, token_expires_at, created_at, updated_at)
@@ -72,6 +89,13 @@ func (r *Repo) UpdateIdentityTokens(identityID, accessToken, refreshToken string
 	)
 	if err != nil {
 		return fmt.Errorf("update identity %s tokens: %w", identityID, err)
+	}
+	return nil
+}
+
+func (r *Repo) DeleteIdentity(identityID string) error {
+	if _, err := r.db.Exec(`DELETE FROM identities WHERE id = ?`, identityID); err != nil {
+		return fmt.Errorf("delete identity %s: %w", identityID, err)
 	}
 	return nil
 }

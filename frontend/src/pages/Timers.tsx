@@ -35,9 +35,11 @@ export default function Timers() {
     <div className="dashboard">
       <header>
         <h1>Subathon Timers</h1>
-        <Link to="/account" className="back-link">
-          {user?.displayName ?? 'Account'}
-        </Link>
+        <div className="header-links">
+          <Link to="/account" className="back-link">
+            {user?.displayName ?? 'Account'}
+          </Link>
+        </div>
       </header>
 
       <section className="events">
@@ -50,6 +52,7 @@ export default function Timers() {
             {timers.map((t) => (
               <li key={t.id}>
                 <Link to={`/t/${t.id}`}>{t.name}</Link>
+                {!t.owner && <span className="platform">moderator</span>}
                 <span className={t.running ? 'status-ok' : 'status-down'}>
                   {t.running ? 'running' : 'stopped'}
                 </span>

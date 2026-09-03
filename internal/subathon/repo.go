@@ -14,8 +14,55 @@ type TimerRecord struct {
 	EndsAt         time.Time
 	RemainingSecs  int
 	TotalAddedSecs int
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+
+	// TotalMoneyRaised is the running total of every event's MoneyAdded,
+	// mirroring TotalAddedSecs for time. MoneyGoal is the configured
+	// target to raise toward; 0 means no goal set.
+	TotalMoneyRaised float64
+	MoneyGoal        float64
+
+	// TwitchBroadcasterID/TwitchBroadcasterUsername identify the Twitch
+	// channel (if any) this timer watches for live events. Empty means
+	// none configured.
+	TwitchBroadcasterID       string
+	TwitchBroadcasterUsername string
+
+	// KickBroadcasterID/KickBroadcasterUsername are the Kick equivalent.
+	KickBroadcasterID       string
+	KickBroadcasterUsername string
+
+	// StreamElementsToken/StreamElementsChannelID/
+	// StreamElementsDisplayName identify the StreamElements account (if
+	// any) this timer polls for tips (see Timer.SetStreamElementsAccount).
+	// Unlike the Twitch/Kick fields above, StreamElementsToken is a
+	// secret and must never be returned from any API response.
+	StreamElementsToken       string
+	StreamElementsChannelID   string
+	StreamElementsDisplayName string
+
+	// Locked/Hidden are toggled via the dashboard or a channel
+	// moderator's "!timer lock"/"!timer unlock"/"!timer hide"/
+	// "!timer unhide" chat command; see Timer.SetLocked/SetHidden.
+	Locked bool
+	Hidden bool
+
+	// OverlayTimerBg/OverlayTimerText/OverlayMoneyBg/OverlayMoneyText/
+	// OverlayGoalBg/OverlayGoalText/OverlayGoalAmountBg/
+	// OverlayGoalAmountText are hex colors customizing the public
+	// overlays' pills (see Timer.SetOverlayColors). Empty means not yet
+	// customized — callers layer DefaultOverlayColors on top.
+	OverlayTimerBg   string
+	OverlayTimerText string
+	OverlayMoneyBg   string
+	OverlayMoneyText string
+
+	OverlayGoalBg         string
+	OverlayGoalText       string
+	OverlayGoalAmountBg   string
+	OverlayGoalAmountText string
+
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // Repo persists timers and their contributor events. Implementations must
@@ -40,4 +87,45 @@ type Repo interface {
 	// RecentEvents returns up to limit of a timer's most recent events,
 	// newest first.
 	RecentEvents(timerID string, limit int) ([]Event, error)
+
+	// AllEvents returns every event ever recorded against timerID, newest
+	// first — the full contribution history, unlike RecentEvents' capped
+	// view. Callers needing it sorted a different way or filtered to one
+	// contributor do so themselves (see the /history page).
+	AllEvents(timerID string) ([]Event, error)
+
+	// RewardRules returns timerID's explicitly configured reward rules.
+	// Implementations return an empty (not nil-erroring) map if the timer
+	// hasn't had any saved yet; callers layer defaults on top.
+	RewardRules(timerID string) (RewardRules, error)
+
+	// SaveRewardRules replaces timerID's reward rules wholesale.
+	SaveRewardRules(timerID string, rules RewardRules) error
+
+	// MoneyRules returns timerID's explicitly configured money rules.
+	// Implementations return an empty (not nil-erroring) map if the timer
+	// hasn't had any saved yet; callers layer DefaultMoneyRules on top.
+	MoneyRules(timerID string) (MoneyRules, error)
+
+	// SaveMoneyRules replaces timerID's money rules wholesale.
+	SaveMoneyRules(timerID string, rules MoneyRules) error
+
+	// MoneyMilestones returns timerID's configured dollar-amount
+	// milestones, ordered by amount ascending. Implementations return an
+	// empty (not nil-erroring) slice if none have been saved yet.
+	MoneyMilestones(timerID string) ([]MoneyMilestone, error)
+
+	// SaveMoneyMilestones replaces timerID's milestone list wholesale.
+	SaveMoneyMilestones(timerID string, milestones []MoneyMilestone) error
+
+	// ListModerators returns the user IDs of every account with moderator
+	// access to timerID (not including its owner).
+	ListModerators(timerID string) ([]string, error)
+
+	// AddModerator grants userID moderator access to timerID. Idempotent.
+	AddModerator(timerID, userID string) error
+
+	// RemoveModerator revokes userID's moderator access to timerID, if
+	// they had it. Not an error if they didn't.
+	RemoveModerator(timerID, userID string) error
 }

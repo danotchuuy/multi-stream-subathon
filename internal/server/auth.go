@@ -30,6 +30,7 @@ func mountAuthRoutes(r chi.Router, deps Deps) {
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth(deps.Auth))
 		r.Get("/api/me", handleMe(deps.Auth))
+		r.Delete("/api/identities/{platform}", handleUnlinkIdentity(deps.Auth))
 	})
 }
 
@@ -134,6 +135,35 @@ func handleOAuthCallback(deps Deps) http.HandlerFunc {
 
 		platform := auth.Platform(providerName)
 
+		// Twitch requires the broadcaster (or one of their moderators) to
+		// have granted channel:read:subscriptions/bits:read (see
+		// oauth.NewTwitch) before an EventSub subscription for that
+		// channel can be created, so do it right after this identity
+		// authorizes — on both login and link, since either can be how a
+		// Twitch identity first appears on the account — for their own
+		// channel and, in case they're moderating someone else's, every
+		// channel Twitch says they moderate. Best-effort throughout: a
+		// failure here shouldn't break login/linking.
+		if providerName == "twitch" && deps.Twitch != nil {
+			if err := deps.Twitch.EnsureBroadcasterSubscriptions(platformUserID); err != nil {
+				log.Printf("twitch: ensure eventsub subscriptions for %s: %v", platformUserID, err)
+			}
+			if modChannels, err := deps.Twitch.ModeratedChannels(accessToken, platformUserID); err != nil {
+				log.Printf("twitch: list moderated channels for %s: %v", platformUserID, err)
+			} else {
+				for _, ch := range modChannels {
+					if err := deps.Twitch.EnsureBroadcasterSubscriptions(ch.BroadcasterID); err != nil {
+						log.Printf("twitch: ensure eventsub subscriptions for moderated channel %s: %v", ch.BroadcasterID, err)
+					}
+				}
+			}
+		}
+
+		// Kick's webhook subscriptions use this app's own token (see
+		// kick.Client.EnsureBroadcasterSubscriptions) rather than the
+		// broadcaster's, so unlike Twitch there's nothing to (re)trigger
+		// here — activation happens entirely from handleSetKickChannel.
+
 		if fs.Purpose == "link" {
 			err := deps.Auth.LinkIdentity(fs.UserID, platform, platformUserID, platformUsername, accessToken, refreshToken, expiresAt)
 			if err != nil {
@@ -215,6 +245,30 @@ func handleMe(svc *auth.Service) http.HandlerFunc {
 	}
 }
 
+// handleUnlinkIdentity removes the signed-in user's identity on
+// {platform} (e.g. "twitch" or "kick") — an "unlink"/"log out of" action
+// from the account page's linked-platforms list. Refuses to remove their
+// only linked identity, since there's no other way back into the account.
+func handleUnlinkIdentity(svc *auth.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		u := userFromContext(r)
+		platform := auth.Platform(chi.URLParam(r, "platform"))
+
+		err := svc.UnlinkIdentity(u.ID, platform)
+		switch {
+		case err == nil:
+			w.WriteHeader(http.StatusNoContent)
+		case errors.Is(err, auth.ErrLastIdentity):
+			http.Error(w, "can't unlink your only linked account — link another platform first", http.StatusBadRequest)
+		case errors.Is(err, auth.ErrIdentityNotLinked):
+			http.Error(w, "that platform isn't linked to your account", http.StatusNotFound)
+		default:
+			log.Printf("server: unlink %s for user %s: %v", platform, u.ID, err)
+			http.Error(w, "failed to unlink account", http.StatusInternalServerError)
+		}
+	}
+}
+
 // --- session cookie + auth context plumbing ---
 
 type userCtxKey struct{}
@@ -244,6 +298,24 @@ func requireOwner() func(http.Handler) http.Handler {
 			u := userFromContext(r)
 			if t.UserID() == "" || t.UserID() != u.ID {
 				http.Error(w, "you do not own this timer", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// requireOwnerOrModerator 403s unless the authenticated user (from
+// requireAuth) owns the timer resolved by timerContext or has been
+// granted moderator access to it (see Timer.AddModerator). Mount both,
+// requireAuth first.
+func requireOwnerOrModerator() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			t := timerFromContext(r)
+			u := userFromContext(r)
+			if t.UserID() != u.ID && !t.IsModerator(u.ID) {
+				http.Error(w, "you do not have access to this timer", http.StatusForbidden)
 				return
 			}
 			next.ServeHTTP(w, r)
