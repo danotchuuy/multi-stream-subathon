@@ -78,6 +78,117 @@ func fillOverlayColorDefaults(c OverlayColors) OverlayColors {
 	return c
 }
 
+// StatIconStyle selects which of two representations StatIcons' per-
+// category fields hold: a native emoji character (whose color is fixed
+// by the emoji font and can't be overridden) or a monochrome SVG icon
+// key from the frontend's fixed set (see server.statSVGIconKeys), whose
+// color is whatever the matching *Color field says.
+type StatIconStyle string
+
+const (
+	StatIconStyleEmoji StatIconStyle = "emoji"
+	StatIconStyleSVG   StatIconStyle = "svg"
+)
+
+// StatIcons customizes the overlay's rotating stat list's per-category
+// icon — set via Timer.SetStatIcons from the styling page. Style picks
+// which of two representations Subs/Bits/Donations hold (see
+// StatIconStyle); SubsColor/BitsColor/DonationsColor and Outline only
+// take effect when Style is StatIconStyleSVG, since an emoji's own color
+// and fill can't be overridden. Outline swaps every SVG icon (hand-drawn
+// shape or Unicode glyph alike) from a solid fill to a hollow stroke;
+// unlike the colors, it's one setting shared across all three
+// categories rather than per-category, since "solid vs. outline" is a
+// single style choice, not a per-icon one. Always fully populated
+// (DefaultStatIcons fills in anything unset, per Style), never a zero
+// value.
+type StatIcons struct {
+	Style   StatIconStyle `json:"style"`
+	Outline bool          `json:"outline"`
+
+	Subs      string `json:"subs"`
+	Bits      string `json:"bits"`
+	Donations string `json:"donations"`
+
+	SubsColor      string `json:"subsColor"`
+	BitsColor      string `json:"bitsColor"`
+	DonationsColor string `json:"donationsColor"`
+}
+
+// DefaultStatIcons is used for any field a timer hasn't customized.
+func DefaultStatIcons() StatIcons {
+	return StatIcons{
+		Style:     StatIconStyleEmoji,
+		Outline:   false,
+		Subs:      "💜",
+		Bits:      "💎",
+		Donations: "💵",
+
+		SubsColor:      "#ffffff",
+		BitsColor:      "#ffffff",
+		DonationsColor: "#ffffff",
+	}
+}
+
+// defaultStatIconValue is Subs/Bits/Donations' default value for style —
+// an emoji for StatIconStyleEmoji, an SVG icon key for StatIconStyleSVG.
+// The two representations aren't interchangeable, so which default
+// applies depends on which style ends up set, not just DefaultStatIcons'
+// fixed emoji.
+func defaultStatIconValue(style StatIconStyle, category string) string {
+	if style == StatIconStyleSVG {
+		switch category {
+		case "subs":
+			return "heart"
+		case "bits":
+			return "gem"
+		case "donations":
+			return "dollar"
+		}
+	}
+	d := DefaultStatIcons()
+	switch category {
+	case "subs":
+		return d.Subs
+	case "bits":
+		return d.Bits
+	case "donations":
+		return d.Donations
+	}
+	return ""
+}
+
+// fillStatIconDefaults returns c with defaults filled in for any field
+// left empty — Style defaults to StatIconStyleEmoji, and each of
+// Subs/Bits/Donations defaults per defaultStatIconValue(c.Style, ...)
+// (so a field left empty gets a default matching whatever Style ended up
+// set, not necessarily DefaultStatIcons' emoji).
+func fillStatIconDefaults(c StatIcons) StatIcons {
+	if c.Style == "" {
+		c.Style = StatIconStyleEmoji
+	}
+	if c.Subs == "" {
+		c.Subs = defaultStatIconValue(c.Style, "subs")
+	}
+	if c.Bits == "" {
+		c.Bits = defaultStatIconValue(c.Style, "bits")
+	}
+	if c.Donations == "" {
+		c.Donations = defaultStatIconValue(c.Style, "donations")
+	}
+	d := DefaultStatIcons()
+	if c.SubsColor == "" {
+		c.SubsColor = d.SubsColor
+	}
+	if c.BitsColor == "" {
+		c.BitsColor = d.BitsColor
+	}
+	if c.DonationsColor == "" {
+		c.DonationsColor = d.DonationsColor
+	}
+	return c
+}
+
 // Snapshot is the point-in-time view of a timer sent to clients.
 type Snapshot struct {
 	ID             string    `json:"id"`
@@ -132,6 +243,29 @@ type Snapshot struct {
 	// colors — always populated (DefaultOverlayColors until customized),
 	// never the zero value.
 	OverlayColors OverlayColors `json:"overlayColors"`
+
+	// SubsGiven/BitsGiven/DonationsGiven are running totals of this
+	// timer's three "gift categories" (see contributionCounts), for the
+	// overlay's optional rotating stat list. SubsGiven counts subs plus
+	// gifted subs (a 5-sub gift counts as 5); BitsGiven counts bits/Kicks
+	// contributed; DonationsGiven counts the number of tip/donation
+	// events (not their dollar total, which the money pill already
+	// shows).
+	SubsGiven      int `json:"subsGiven"`
+	BitsGiven      int `json:"bitsGiven"`
+	DonationsGiven int `json:"donationsGiven"`
+
+	// StatsRotationEnabled turns on the main overlay's rotating stat list
+	// (far left of the timer/money pills), cycling through SubsGiven/
+	// BitsGiven/DonationsGiven with an icon per category. Off by default
+	// — see Timer.SetStatsRotationEnabled.
+	StatsRotationEnabled bool `json:"statsRotationEnabled"`
+
+	// StatIcons customizes each rotating stat list category's icon —
+	// either an emoji or a colorable monochrome SVG icon, see
+	// StatIconStyle — always populated (DefaultStatIcons until
+	// customized), never the zero value.
+	StatIcons StatIcons `json:"statIcons"`
 }
 
 // Timer holds one subathon clock's mutable state behind a mutex. It is
@@ -212,6 +346,24 @@ type Timer struct {
 	// fully populated (see fillOverlayColorDefaults), never a zero value.
 	overlayColors OverlayColors
 
+	// subsGiven/bitsGiven/donationsGiven mirror totalAdded/
+	// totalMoneyRaised, but count contributions per "gift category"
+	// instead of seconds/dollars — see Snapshot.SubsGiven and
+	// contributionCounts. Maintained incrementally in AddEvent/
+	// RemoveEvent, not recomputed from history.
+	subsGiven      int
+	bitsGiven      int
+	donationsGiven int
+
+	// statsRotationEnabled turns on the overlay's rotating stat list; see
+	// SetStatsRotationEnabled.
+	statsRotationEnabled bool
+
+	// statIcons customizes each rotating stat list category's icon;
+	// always fully populated (see fillStatIconDefaults), never a zero
+	// value.
+	statIcons StatIcons
+
 	// moderatorIDs are the accounts (besides the owner) allowed to control
 	// this timer: reset/resume/stop, add events, reward rules, watched
 	// channels — everything except managing this list itself. See
@@ -261,6 +413,21 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 			GoalText:       rec.OverlayGoalText,
 			GoalAmountBg:   rec.OverlayGoalAmountBg,
 			GoalAmountText: rec.OverlayGoalAmountText,
+		}),
+		subsGiven:            rec.SubsGiven,
+		bitsGiven:            rec.BitsGiven,
+		donationsGiven:       rec.DonationsGiven,
+		statsRotationEnabled: rec.StatsRotationEnabled,
+		statIcons: fillStatIconDefaults(StatIcons{
+			Style:     StatIconStyle(rec.StatIconStyle),
+			Outline:   rec.StatIconOutline,
+			Subs:      rec.StatIconSubs,
+			Bits:      rec.StatIconBits,
+			Donations: rec.StatIconDonations,
+
+			SubsColor:      rec.StatIconSubsColor,
+			BitsColor:      rec.StatIconBitsColor,
+			DonationsColor: rec.StatIconDonationsColor,
 		}),
 		moderatorIDs: mods,
 	}
@@ -601,6 +768,92 @@ func (t *Timer) SetOverlayColors(colors OverlayColors) error {
 	return t.persistLocked()
 }
 
+// StatsRotationEnabled reports whether the overlay's rotating stat list
+// (subs/bits-Kicks/donations, far left of the timer/money pills) is
+// turned on for this timer.
+func (t *Timer) StatsRotationEnabled() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.statsRotationEnabled
+}
+
+// SetStatsRotationEnabled turns the overlay's rotating stat list on or
+// off.
+func (t *Timer) SetStatsRotationEnabled(enabled bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.statsRotationEnabled = enabled
+	return t.persistLocked()
+}
+
+// SetContributionCounts directly overrides the rotating stat list's three
+// running totals (see Snapshot.SubsGiven), e.g. to reconcile against a
+// count kept elsewhere, backfill totals from before this feature existed
+// on a timer that predates the sqlite migration's backfill, or correct a
+// miscount. Unlike AddEvent, this doesn't add a history entry or touch
+// the clock/money total — it's a correction to these three totals only,
+// same relationship SetMoneyRaised has to AddEvent's MoneyAdded.
+func (t *Timer) SetContributionCounts(subsGiven, bitsGiven, donationsGiven int) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.subsGiven = subsGiven
+	t.bitsGiven = bitsGiven
+	t.donationsGiven = donationsGiven
+	return t.persistLocked()
+}
+
+// StatIcons returns this timer's configured rotating-stat-list icons,
+// with defaults filled in for anything unset (see fillStatIconDefaults).
+func (t *Timer) StatIcons() StatIcons {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.statIcons
+}
+
+// SetStatIcons changes each rotating stat list category's icon (and, in
+// StatIconStyleSVG, its color). An empty field falls back to a default
+// for that field (see fillStatIconDefaults).
+func (t *Timer) SetStatIcons(icons StatIcons) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.statIcons = fillStatIconDefaults(icons)
+	return t.persistLocked()
+}
+
+// contributionCounts reports how much e should add to subsGiven,
+// bitsGiven, and donationsGiven — at most one of the three is nonzero
+// per event, since EventType already partitions every real contribution
+// into exactly one of these three "gift categories" (EventManual test
+// events, which don't represent a real contribution kind, add to none).
+// Subs/resubs/gifted subs and bits/Kicks sum e.Amount (the number of
+// subs gifted, or the number of bits/Kicks) so e.g. a single 5-sub gift
+// or 500-bit cheer counts as 5/500, not 1 — falling back to 1 if Amount
+// wasn't set. Donations count events instead of summing Amount, since
+// Amount there is a dollar figure the money pill already shows, not a
+// "how many" count.
+func contributionCounts(e Event) (subs, bits, donations int) {
+	switch e.Type {
+	case EventSub, EventResub, EventGiftedSub:
+		return amountOrOne(e.Amount), 0, 0
+	case EventBits:
+		return 0, amountOrOne(e.Amount), 0
+	case EventDonation:
+		return 0, 0, 1
+	default:
+		return 0, 0, 0
+	}
+}
+
+func amountOrOne(amount float64) int {
+	if amount <= 0 {
+		return 1
+	}
+	return int(amount)
+}
+
 // AddEvent records a contributor event and, unless the timer is locked
 // (see SetLocked), extends the clock: the running end time if the
 // countdown is live, or the frozen remaining time if it's stopped. e.ID
@@ -628,6 +881,11 @@ func (t *Timer) AddEvent(e Event) error {
 		}
 	}
 	t.totalMoneyRaised += e.MoneyAdded
+
+	subs, bits, donations := contributionCounts(e)
+	t.subsGiven += subs
+	t.bitsGiven += bits
+	t.donationsGiven += donations
 
 	t.events = append(t.events, e)
 	if len(t.events) > maxRecentEvents {
@@ -675,6 +933,11 @@ func (t *Timer) RemoveEvent(eventID string) error {
 		t.remaining -= removedSecs
 	}
 	t.totalMoneyRaised -= removed.MoneyAdded
+
+	subs, bits, donations := contributionCounts(removed)
+	t.subsGiven -= subs
+	t.bitsGiven -= bits
+	t.donationsGiven -= donations
 
 	if err := t.repo.DeleteEvent(t.id, eventID); err != nil {
 		return err
@@ -813,24 +1076,29 @@ func (t *Timer) Snapshot() Snapshot {
 	copy(events, t.events)
 
 	return Snapshot{
-		ID:               t.id,
-		Name:             t.name,
-		Running:          t.running,
-		StartedAt:        t.startedAt,
-		EndsAt:           endsAt,
-		RemainingSecs:    int(remaining.Seconds()),
-		TotalAddedSecs:   t.totalAdded,
-		RecentEvents:     events,
-		TwitchChannel:    t.twitchBroadcasterUsername,
-		KickChannel:      t.kickBroadcasterUsername,
-		YouTubeChannel:   t.youtubeChannelTitle,
-		YouTubeChannelID: t.youtubeChannelID,
-		TotalMoneyRaised: t.totalMoneyRaised,
-		MoneyGoal:        t.moneyGoal,
-		Locked:           t.locked,
-		Hidden:           t.hidden,
-		Ended:            t.ended,
-		OverlayColors:    t.overlayColors,
+		ID:                   t.id,
+		Name:                 t.name,
+		Running:              t.running,
+		StartedAt:            t.startedAt,
+		EndsAt:               endsAt,
+		RemainingSecs:        int(remaining.Seconds()),
+		TotalAddedSecs:       t.totalAdded,
+		RecentEvents:         events,
+		TwitchChannel:        t.twitchBroadcasterUsername,
+		KickChannel:          t.kickBroadcasterUsername,
+		YouTubeChannel:       t.youtubeChannelTitle,
+		YouTubeChannelID:     t.youtubeChannelID,
+		TotalMoneyRaised:     t.totalMoneyRaised,
+		MoneyGoal:            t.moneyGoal,
+		Locked:               t.locked,
+		Hidden:               t.hidden,
+		Ended:                t.ended,
+		OverlayColors:        t.overlayColors,
+		SubsGiven:            t.subsGiven,
+		BitsGiven:            t.bitsGiven,
+		DonationsGiven:       t.donationsGiven,
+		StatsRotationEnabled: t.statsRotationEnabled,
+		StatIcons:            t.statIcons,
 	}
 }
 
@@ -874,6 +1142,18 @@ func (t *Timer) persistLocked() error {
 		OverlayGoalText:              t.overlayColors.GoalText,
 		OverlayGoalAmountBg:          t.overlayColors.GoalAmountBg,
 		OverlayGoalAmountText:        t.overlayColors.GoalAmountText,
+		SubsGiven:                    t.subsGiven,
+		BitsGiven:                    t.bitsGiven,
+		DonationsGiven:               t.donationsGiven,
+		StatsRotationEnabled:         t.statsRotationEnabled,
+		StatIconStyle:                string(t.statIcons.Style),
+		StatIconOutline:              t.statIcons.Outline,
+		StatIconSubs:                 t.statIcons.Subs,
+		StatIconBits:                 t.statIcons.Bits,
+		StatIconDonations:            t.statIcons.Donations,
+		StatIconSubsColor:            t.statIcons.SubsColor,
+		StatIconBitsColor:            t.statIcons.BitsColor,
+		StatIconDonationsColor:       t.statIcons.DonationsColor,
 		UpdatedAt:                    time.Now(),
 	})
 }

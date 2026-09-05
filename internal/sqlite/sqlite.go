@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS timers (
 	overlay_goal_text             TEXT NOT NULL DEFAULT '',
 	overlay_goal_amount_bg        TEXT NOT NULL DEFAULT '',
 	overlay_goal_amount_text      TEXT NOT NULL DEFAULT '',
+	subs_given                    INTEGER NOT NULL DEFAULT 0,
+	bits_given                    INTEGER NOT NULL DEFAULT 0,
+	donations_given               INTEGER NOT NULL DEFAULT 0,
+	show_stats_rotation           INTEGER NOT NULL DEFAULT 0,
+	stat_icon_style               TEXT NOT NULL DEFAULT '',
+	stat_icon_outline             INTEGER NOT NULL DEFAULT 0,
+	stat_icon_subs                TEXT NOT NULL DEFAULT '',
+	stat_icon_bits                TEXT NOT NULL DEFAULT '',
+	stat_icon_donations           TEXT NOT NULL DEFAULT '',
+	stat_icon_subs_color          TEXT NOT NULL DEFAULT '',
+	stat_icon_bits_color          TEXT NOT NULL DEFAULT '',
+	stat_icon_donations_color     TEXT NOT NULL DEFAULT '',
 	created_at                    TEXT NOT NULL,
 	updated_at                    TEXT NOT NULL
 );
@@ -268,6 +280,77 @@ func Open(path string) (*Repo, error) {
 		return nil, fmt.Errorf("migrate money_milestones.hidden: %w", err)
 	}
 
+	// subs_given/bits_given/donations_given back the overlay's rotating
+	// stat list (see subathon.Timer.contributionCounts) and, like every
+	// other running total in this schema, are maintained incrementally
+	// from here on rather than recomputed. That leaves a gap for timers
+	// that already have contribution history predating these columns, so
+	// — only the first time each column is actually added, not on every
+	// startup — backfill them from that existing events history.
+	statsColumnsExisted, err := hasColumn(db, "timers", "subs_given")
+	if err != nil {
+		db.Close()
+		return nil, fmt.Errorf("check timers.subs_given: %w", err)
+	}
+	if err := addColumnIfMissing(db, "timers", "subs_given", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.subs_given: %w", err)
+	}
+	if err := addColumnIfMissing(db, "timers", "bits_given", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.bits_given: %w", err)
+	}
+	if err := addColumnIfMissing(db, "timers", "donations_given", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.donations_given: %w", err)
+	}
+	if err := addColumnIfMissing(db, "timers", "show_stats_rotation", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.show_stats_rotation: %w", err)
+	}
+	if !statsColumnsExisted {
+		// Mirrors Timer.contributionCounts: subs/resubs/gifted subs and
+		// bits/Kicks sum each event's amount (falling back to 1 for a row
+		// with no amount recorded), donations count events since amount
+		// there is a dollar figure, not a "how many".
+		if _, err := db.Exec(`
+			UPDATE timers SET subs_given = (
+				SELECT COALESCE(SUM(CASE WHEN amount IS NULL OR amount <= 0 THEN 1 ELSE amount END), 0)
+				FROM events WHERE events.timer_id = timers.id AND events.type IN ('sub', 'resub', 'gifted_sub')
+			)`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("backfill timers.subs_given: %w", err)
+		}
+		if _, err := db.Exec(`
+			UPDATE timers SET bits_given = (
+				SELECT COALESCE(SUM(CASE WHEN amount IS NULL OR amount <= 0 THEN 1 ELSE amount END), 0)
+				FROM events WHERE events.timer_id = timers.id AND events.type = 'bits'
+			)`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("backfill timers.bits_given: %w", err)
+		}
+		if _, err := db.Exec(`
+			UPDATE timers SET donations_given = (
+				SELECT COUNT(*) FROM events WHERE events.timer_id = timers.id AND events.type = 'donation'
+			)`); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("backfill timers.donations_given: %w", err)
+		}
+	}
+	for _, col := range []string{
+		"stat_icon_style", "stat_icon_subs", "stat_icon_bits", "stat_icon_donations",
+		"stat_icon_subs_color", "stat_icon_bits_color", "stat_icon_donations_color",
+	} {
+		if err := addColumnIfMissing(db, "timers", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate timers.%s: %w", col, err)
+		}
+	}
+	if err := addColumnIfMissing(db, "timers", "stat_icon_outline", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.stat_icon_outline: %w", err)
+	}
+
 	// reward_rules moved from being keyed by user_id to timer_id (reward
 	// rates are now per-timer, not account-wide). A pre-existing table
 	// from before that change has no timer_id column; since reward rules
@@ -282,12 +365,11 @@ func Open(path string) (*Repo, error) {
 	return &Repo{db: db}, nil
 }
 
-// addColumnIfMissing runs `ALTER TABLE table ADD COLUMN column def` only if
-// that column doesn't already exist, so it's safe to call on every start.
-func addColumnIfMissing(db *sql.DB, table, column, def string) error {
+// hasColumn reports whether table already has column.
+func hasColumn(db *sql.DB, table, column string) (bool, error) {
 	rows, err := db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
 	if err != nil {
-		return fmt.Errorf("inspect %s: %w", table, err)
+		return false, fmt.Errorf("inspect %s: %w", table, err)
 	}
 	defer rows.Close()
 
@@ -301,14 +383,24 @@ func addColumnIfMissing(db *sql.DB, table, column, def string) error {
 			pk         int
 		)
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultVal, &pk); err != nil {
-			return fmt.Errorf("scan %s column info: %w", table, err)
+			return false, fmt.Errorf("scan %s column info: %w", table, err)
 		}
 		if name == column {
-			return nil // already present
+			return true, nil
 		}
 	}
-	if err := rows.Err(); err != nil {
+	return false, rows.Err()
+}
+
+// addColumnIfMissing runs `ALTER TABLE table ADD COLUMN column def` only if
+// that column doesn't already exist, so it's safe to call on every start.
+func addColumnIfMissing(db *sql.DB, table, column, def string) error {
+	exists, err := hasColumn(db, table, column)
+	if err != nil {
 		return err
+	}
+	if exists {
+		return nil
 	}
 
 	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, def)); err != nil {
@@ -394,6 +486,9 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		       overlay_goal_bg, overlay_goal_text, overlay_goal_amount_bg, overlay_goal_amount_text,
 		       stream_elements_token, stream_elements_refresh_token, stream_elements_token_expires_at,
 		       stream_elements_channel_id, stream_elements_display_name,
+		       subs_given, bits_given, donations_given, show_stats_rotation,
+		       stat_icon_style, stat_icon_outline, stat_icon_subs, stat_icon_bits, stat_icon_donations,
+		       stat_icon_subs_color, stat_icon_bits_color, stat_icon_donations_color,
 		       created_at, updated_at
 		FROM timers
 		ORDER BY created_at`)
@@ -405,7 +500,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 	var out []subathon.TimerRecord
 	for rows.Next() {
 		var rec subathon.TimerRecord
-		var running, locked, hidden, ended int
+		var running, locked, hidden, ended, showStatsRotation, statIconOutline int
 		var userID, startedAt, endsAt sql.NullString
 		var twitchBroadcasterID, twitchBroadcasterUsername sql.NullString
 		var kickBroadcasterID, kickBroadcasterUsername sql.NullString
@@ -422,6 +517,9 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 			&rec.OverlayGoalBg, &rec.OverlayGoalText, &rec.OverlayGoalAmountBg, &rec.OverlayGoalAmountText,
 			&rec.StreamElementsToken, &rec.StreamElementsRefreshToken, &streamElementsTokenExpiresAt,
 			&rec.StreamElementsChannelID, &rec.StreamElementsDisplayName,
+			&rec.SubsGiven, &rec.BitsGiven, &rec.DonationsGiven, &showStatsRotation,
+			&rec.StatIconStyle, &statIconOutline, &rec.StatIconSubs, &rec.StatIconBits, &rec.StatIconDonations,
+			&rec.StatIconSubsColor, &rec.StatIconBitsColor, &rec.StatIconDonationsColor,
 			&createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan timer row: %w", err)
 		}
@@ -440,6 +538,8 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		rec.Locked = locked != 0
 		rec.Hidden = hidden != 0
 		rec.Ended = ended != 0
+		rec.StatsRotationEnabled = showStatsRotation != 0
+		rec.StatIconOutline = statIconOutline != 0
 		rec.CreatedAt = parseTime(createdAt)
 		rec.UpdatedAt = parseTime(updatedAt)
 		out = append(out, rec)
@@ -459,6 +559,9 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		     overlay_goal_bg = ?, overlay_goal_text = ?, overlay_goal_amount_bg = ?, overlay_goal_amount_text = ?,
 		     stream_elements_token = ?, stream_elements_refresh_token = ?, stream_elements_token_expires_at = ?,
 		     stream_elements_channel_id = ?, stream_elements_display_name = ?,
+		     subs_given = ?, bits_given = ?, donations_given = ?, show_stats_rotation = ?,
+		     stat_icon_style = ?, stat_icon_outline = ?, stat_icon_subs = ?, stat_icon_bits = ?, stat_icon_donations = ?,
+		     stat_icon_subs_color = ?, stat_icon_bits_color = ?, stat_icon_donations_color = ?,
 		     updated_at = ?
 		 WHERE id = ?`,
 		boolToInt(rec.Running), nullableTime(rec.StartedAt), nullableTime(rec.EndsAt),
@@ -471,6 +574,9 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		rec.OverlayGoalBg, rec.OverlayGoalText, rec.OverlayGoalAmountBg, rec.OverlayGoalAmountText,
 		rec.StreamElementsToken, rec.StreamElementsRefreshToken, nullableTime(rec.StreamElementsTokenExpiresAt),
 		rec.StreamElementsChannelID, rec.StreamElementsDisplayName,
+		rec.SubsGiven, rec.BitsGiven, rec.DonationsGiven, boolToInt(rec.StatsRotationEnabled),
+		rec.StatIconStyle, boolToInt(rec.StatIconOutline), rec.StatIconSubs, rec.StatIconBits, rec.StatIconDonations,
+		rec.StatIconSubsColor, rec.StatIconBitsColor, rec.StatIconDonationsColor,
 		formatTime(rec.UpdatedAt), rec.ID,
 	)
 	if err != nil {

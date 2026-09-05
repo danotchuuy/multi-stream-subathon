@@ -2,8 +2,11 @@
 	docker-builder docker-build docker-build-local docker-push
 
 # Runs the API and the UI together for local testing; Ctrl+C stops both.
+# Loads .env first, if present (it's gitignored — see its own comments),
+# so credentials set there reach the server subprocess below.
 run:
 	@trap 'kill 0' EXIT; \
+	[ -f .env ] && . ./.env; \
 	$(MAKE) server & \
 	$(MAKE) frontend & \
 	wait

@@ -77,6 +77,32 @@ type TimerRecord struct {
 	OverlayGoalAmountBg   string
 	OverlayGoalAmountText string
 
+	// SubsGiven/BitsGiven/DonationsGiven/StatsRotationEnabled back the
+	// overlay's optional rotating stat list — see
+	// Timer.contributionCounts and Snapshot.SubsGiven.
+	SubsGiven            int
+	BitsGiven            int
+	DonationsGiven       int
+	StatsRotationEnabled bool
+
+	// StatIconStyle/StatIconSubs/StatIconBits/StatIconDonations are the
+	// rotating stat list's per-category icon (see Timer.SetStatIcons) —
+	// StatIconStyle is "emoji" or "svg", and Subs/Bits/Donations hold
+	// either an emoji character or an SVG icon key depending on it.
+	// StatIcon{Subs,Bits,Donations}Color are hex colors, and
+	// StatIconOutline swaps every icon from filled to hollow-stroked —
+	// both meaningful only when StatIconStyle is "svg". Empty/false means
+	// not yet customized — callers layer DefaultStatIcons on top.
+	StatIconStyle     string
+	StatIconOutline   bool
+	StatIconSubs      string
+	StatIconBits      string
+	StatIconDonations string
+
+	StatIconSubsColor      string
+	StatIconBitsColor      string
+	StatIconDonationsColor string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

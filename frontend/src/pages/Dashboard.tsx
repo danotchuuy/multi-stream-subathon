@@ -24,7 +24,6 @@ import {
   setKickChannel,
   setMoneyGoal,
   setMoneyRaised,
-  setOverlayColors,
   setTwitchChannel,
   setYouTubeChannel,
   stopSubathon,
@@ -38,7 +37,6 @@ import type {
   Moderator,
   MoneyMilestone,
   MoneyRules,
-  OverlayColors,
   RewardItem,
   RewardPlatform,
   RewardRules,
@@ -576,119 +574,6 @@ function AddDonationForm({ timerId }: { timerId: string }) {
       </label>
       <button type="submit" disabled={busy || !username.trim() || count <= 0}>
         {saved ? 'Added!' : 'Add donation'}
-      </button>
-      {error && <p className="error-message">{error}</p>}
-    </form>
-  )
-}
-
-/** Color pickers for both public overlays' pills — /overlay's timer and
- * money-goal pills, and /goals-overlay's per-milestone goal pill and its
- * nested dollar-amount pill (background + text color for each). Native
- * <input type="color"> inputs, no library needed — they always hold a
- * 6-digit hex value, matching what the server accepts. */
-function OverlayColorsForm({
-  initialColors,
-  onSave,
-}: {
-  initialColors: OverlayColors
-  onSave: (colors: OverlayColors) => Promise<unknown>
-}) {
-  const [colors, setColors] = useState(initialColors)
-  const [busy, setBusy] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const handleChange = (field: keyof OverlayColors, value: string) => {
-    setColors((prev) => ({ ...prev, [field]: value }))
-    setSaved(false)
-  }
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setSaved(false)
-    setError(null)
-    try {
-      await onSave(colors)
-      setSaved(true)
-    } catch (err) {
-      setError(controlErrorMessage(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <form className="control-group control-group-stacked" onSubmit={handleSubmit}>
-      <div className="overlay-colors-grid">
-        <label>
-          Timer pill background
-          <input
-            type="color"
-            value={colors.timerBg}
-            onChange={(e) => handleChange('timerBg', e.target.value)}
-          />
-        </label>
-        <label>
-          Timer pill text
-          <input
-            type="color"
-            value={colors.timerText}
-            onChange={(e) => handleChange('timerText', e.target.value)}
-          />
-        </label>
-        <label>
-          Money pill background
-          <input
-            type="color"
-            value={colors.moneyBg}
-            onChange={(e) => handleChange('moneyBg', e.target.value)}
-          />
-        </label>
-        <label>
-          Money pill text
-          <input
-            type="color"
-            value={colors.moneyText}
-            onChange={(e) => handleChange('moneyText', e.target.value)}
-          />
-        </label>
-        <label>
-          Goal pill background
-          <input
-            type="color"
-            value={colors.goalBg}
-            onChange={(e) => handleChange('goalBg', e.target.value)}
-          />
-        </label>
-        <label>
-          Goal pill text
-          <input
-            type="color"
-            value={colors.goalText}
-            onChange={(e) => handleChange('goalText', e.target.value)}
-          />
-        </label>
-        <label>
-          Goal amount pill background
-          <input
-            type="color"
-            value={colors.goalAmountBg}
-            onChange={(e) => handleChange('goalAmountBg', e.target.value)}
-          />
-        </label>
-        <label>
-          Goal amount pill text
-          <input
-            type="color"
-            value={colors.goalAmountText}
-            onChange={(e) => handleChange('goalAmountText', e.target.value)}
-          />
-        </label>
-      </div>
-      <button type="submit" disabled={busy}>
-        {saved ? 'Saved!' : 'Save'}
       </button>
       {error && <p className="error-message">{error}</p>}
     </form>
@@ -1240,6 +1125,9 @@ export default function Dashboard() {
         <Link to={`/t/${timerId}/rewards`} className="back-link">
           Reward settings
         </Link>
+        <Link to={`/t/${timerId}/styling`} className="back-link">
+          Timer styling
+        </Link>
         <span className={`status ${connected ? 'status-ok' : 'status-down'}`}>
           {connected ? 'connected' : 'disconnected'}
         </span>
@@ -1344,10 +1232,6 @@ export default function Dashboard() {
                 Add test event
               </button>
             </form>
-            <OverlayColorsForm
-              initialColors={snapshot.overlayColors}
-              onSave={(colors) => setOverlayColors(timerId, colors)}
-            />
           </>
         )}
 

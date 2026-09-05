@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -176,6 +177,9 @@ func New(deps Deps) http.Handler {
 				r.Put("/money-raised", handleSetMoneyRaised(deps.Hub))
 				r.Put("/money-milestones", handleSaveMoneyMilestones())
 				r.Put("/overlay-colors", handleSetOverlayColors(deps.Hub))
+				r.Put("/stats-rotation", handleSetStatsRotation(deps.Hub))
+				r.Put("/contribution-counts", handleSetContributionCounts(deps.Hub))
+				r.Put("/stat-icons", handleSetStatIcons(deps.Hub))
 				r.Put("/twitch-channel", handleSetTwitchChannel(deps))
 				r.Put("/kick-channel", handleSetKickChannel(deps))
 				r.Put("/youtube-channel", handleSetYouTubeChannel(deps))
@@ -745,6 +749,145 @@ func handleSetOverlayColors(hub *ws.Hub) http.HandlerFunc {
 		if err := t.SetOverlayColors(colors); err != nil {
 			log.Printf("server: set overlay colors for timer %s: %v", t.ID(), err)
 			http.Error(w, "failed to set overlay colors", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+type setStatsRotationRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// handleSetStatsRotation turns the main overlay's rotating stat list
+// (subs/bits-Kicks/donations, far left of the timer/money pills) on or
+// off — see Timer.SetStatsRotationEnabled.
+func handleSetStatsRotation(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req setStatsRotationRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := t.SetStatsRotationEnabled(req.Enabled); err != nil {
+			log.Printf("server: set stats rotation for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set stats rotation", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+type setContributionCountsRequest struct {
+	SubsGiven      int `json:"subsGiven"`
+	BitsGiven      int `json:"bitsGiven"`
+	DonationsGiven int `json:"donationsGiven"`
+}
+
+// handleSetContributionCounts directly overrides the rotating stat
+// list's three running totals — see Timer.SetContributionCounts. Like
+// /money-raised, this doesn't add a history entry.
+func handleSetContributionCounts(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req setContributionCountsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.SubsGiven < 0 || req.BitsGiven < 0 || req.DonationsGiven < 0 {
+			http.Error(w, "counts must be non-negative", http.StatusBadRequest)
+			return
+		}
+
+		if err := t.SetContributionCounts(req.SubsGiven, req.BitsGiven, req.DonationsGiven); err != nil {
+			log.Printf("server: set contribution counts for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set contribution counts", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+// maxStatIconRunes bounds each StatIcons emoji field — generous enough
+// for a multi-codepoint emoji (a skin-tone modifier or ZWJ sequence can
+// run to several runes) while still rejecting arbitrary pasted-in text.
+const maxStatIconRunes = 8
+
+// statSVGIconKeys are the only valid Subs/Bits/Donations values when
+// StatIcons.Style is "svg" — must match the frontend's SVG_ICON_OPTIONS
+// (see frontend/src/lib/statRotation.tsx) exactly, since these keys pick
+// which <svg> that page renders.
+var statSVGIconKeys = map[string]bool{
+	"heart":     true,
+	"star":      true,
+	"gem":       true,
+	"dollar":    true,
+	"gift":      true,
+	"crown":     true,
+	"bolt":      true,
+	"fire":      true,
+	"check":     true,
+	"diamond":   true,
+	"snowflake": true,
+	"sparkle":   true,
+	"note":      true,
+	"flag":      true,
+	"skull":     true,
+	"wallet":    true,
+}
+
+// handleSetStatIcons changes each rotating stat list category's icon —
+// either an emoji or, in "svg" style, a monochrome SVG icon key plus its
+// own color (see the styling page's icon-style toggle). An empty field
+// falls back to subathon.DefaultStatIcons for that field.
+func handleSetStatIcons(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var icons subathon.StatIcons
+		if err := json.NewDecoder(r.Body).Decode(&icons); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if icons.Style != "" && icons.Style != subathon.StatIconStyleEmoji && icons.Style != subathon.StatIconStyleSVG {
+			http.Error(w, `style must be "emoji" or "svg"`, http.StatusBadRequest)
+			return
+		}
+		for _, icon := range []string{icons.Subs, icons.Bits, icons.Donations} {
+			if icon == "" {
+				continue
+			}
+			if icons.Style == subathon.StatIconStyleSVG {
+				if !statSVGIconKeys[icon] {
+					http.Error(w, "unrecognized svg icon key", http.StatusBadRequest)
+					return
+				}
+			} else if utf8.RuneCountInString(icon) > maxStatIconRunes {
+				http.Error(w, "each icon must be a single emoji", http.StatusBadRequest)
+				return
+			}
+		}
+		for _, c := range []string{icons.SubsColor, icons.BitsColor, icons.DonationsColor} {
+			if c != "" && !hexColorRE.MatchString(c) {
+				http.Error(w, "colors must be 6-digit hex, e.g. #111111", http.StatusBadRequest)
+				return
+			}
+		}
+
+		if err := t.SetStatIcons(icons); err != nil {
+			log.Printf("server: set stat icons for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set stat icons", http.StatusInternalServerError)
 			return
 		}
 

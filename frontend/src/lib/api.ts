@@ -9,6 +9,7 @@ import type {
   Platform,
   RewardRules,
   Snapshot,
+  StatIcons,
   StreamElementsStatus,
   SubathonEvent,
   TimerSummary,
@@ -248,6 +249,44 @@ export function setOverlayColors(
   return request(`/api/timers/${timerId}/overlay-colors`, {
     method: 'PUT',
     body: JSON.stringify(colors),
+  })
+}
+
+/** Turns the main overlay's rotating stat list (subs/bits-Kicks/
+ * donations, far left of the timer/money pills) on or off. */
+export function setStatsRotation(
+  timerId: string,
+  enabled: boolean,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/stats-rotation`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+/** Directly overrides the rotating stat list's three running totals
+ * (subs/bits-Kicks/donations given), e.g. to correct a miscount or
+ * backfill a value from before this feature existed. Unlike addManualEvent,
+ * this doesn't add a history entry. */
+export function setContributionCounts(
+  timerId: string,
+  counts: { subsGiven: number; bitsGiven: number; donationsGiven: number },
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/contribution-counts`, {
+    method: 'PUT',
+    body: JSON.stringify(counts),
+  })
+}
+
+/** Changes which emoji the rotating stat list uses per category. An
+ * empty field falls back to the server's defaults. */
+export function setStatIcons(
+  timerId: string,
+  icons: StatIcons,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/stat-icons`, {
+    method: 'PUT',
+    body: JSON.stringify(icons),
   })
 }
 

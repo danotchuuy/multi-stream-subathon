@@ -9,6 +9,7 @@ import Login from './pages/Login'
 import Overlay from './pages/Overlay'
 import Privacy from './pages/Privacy'
 import Rewards from './pages/Rewards'
+import Styling from './pages/Styling'
 import Timers from './pages/Timers'
 
 export default function App() {
@@ -58,6 +59,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <Rewards />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/t/:timerId/styling"
+            element={
+              <RequireAuth>
+                <Styling />
               </RequireAuth>
             }
           />

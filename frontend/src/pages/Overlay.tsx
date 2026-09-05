@@ -1,8 +1,9 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
-import { formatDuration, formatMoney } from '../lib/format'
+import { formatDuration, formatWholeMoney } from '../lib/format'
 import { DEFAULT_OVERLAY_COLORS } from '../lib/overlayColors'
+import { DEFAULT_STAT_ICONS, RotatingStatPill } from '../lib/statRotation'
 
 /**
  * Minimal, transparent-background view meant to be added as an OBS
@@ -41,6 +42,7 @@ export default function Overlay() {
   }
 
   const colors = snapshot?.overlayColors ?? DEFAULT_OVERLAY_COLORS
+  const icons = snapshot?.statIcons ?? DEFAULT_STAT_ICONS
 
   return (
     <div className="overlay">
@@ -48,6 +50,21 @@ export default function Overlay() {
         className="overlay-pill-group"
         style={{ background: colors.timerBg }}
       >
+        {snapshot?.statsRotationEnabled ? (
+          <>
+            <RotatingStatPill
+              colors={colors}
+              icons={icons}
+              subsGiven={snapshot.subsGiven}
+              bitsGiven={snapshot.bitsGiven}
+              donationsGiven={snapshot.donationsGiven}
+            />
+            <div
+              className="overlay-pill-divider"
+              style={{ background: colors.timerText }}
+            />
+          </>
+        ) : null}
         {snapshot?.moneyGoal ? (
           <>
             <div
@@ -55,8 +72,8 @@ export default function Overlay() {
               style={{ background: colors.moneyBg, color: colors.moneyText }}
             >
               <span className="overlay-money-label">
-                ${formatMoney(snapshot.totalMoneyRaised)} / $
-                {formatMoney(snapshot.moneyGoal)}
+                ${formatWholeMoney(snapshot.totalMoneyRaised)} / $
+                {formatWholeMoney(snapshot.moneyGoal)}
               </span>
             </div>
             <div

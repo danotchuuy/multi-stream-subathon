@@ -382,6 +382,223 @@ a {
   padding: 2px;
 }
 
+.control-group-heading {
+  width: 100%;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.control-group-heading:not(:first-child) {
+  margin-top: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* Timer styling page (Styling.tsx) */
+
+.styling-preview-section {
+  margin-top: 24px;
+}
+
+.styling-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.styling-preview-header h2,
+.styling-presets-section h2 {
+  font-size: 16px;
+  margin: 0;
+}
+
+.styling-presets-section {
+  margin-top: 24px;
+}
+
+.styling-stats-section {
+  margin-top: 24px;
+}
+
+/* ContributionCountsForm's three number inputs — a fixed 3-column grid
+   like .overlay-colors-grid, so the fields line up instead of reflowing
+   at the container's whim. */
+.styling-stats-counts-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px 24px;
+  width: 100%;
+}
+
+.styling-stats-counts-grid label {
+  align-items: flex-start;
+}
+
+.styling-stats-counts-grid input[type='number'] {
+  width: 100%;
+}
+
+/* StatIconsForm's "Icon style" emoji/svg radio pair — a borderless
+   fieldset so it reads as a labeled group without the browser's default
+   inset box. */
+.styling-icon-style-fieldset {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 20px;
+  width: 100%;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+.styling-icon-style-fieldset legend {
+  width: 100%;
+  padding: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
+/* StatIconsForm's three icon dropdowns, forced onto one row — flex
+   with nowrap rather than a grid, since a grid's "repeat(3, 1fr)"
+   tracks default to a min-width of their content's min-content size
+   (a <select> full of emoji-labeled options can be fairly wide), which
+   can push the columns wider than the row can hold. min-width: 0 below
+   lets each cell shrink past that, so all three always stay side by
+   side instead of the row overflowing/reflowing. */
+.styling-stats-icons-grid {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 14px 24px;
+  width: 100%;
+}
+
+.styling-stats-icons-grid label {
+  align-items: flex-start;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.styling-stats-icons-grid select {
+  width: 100%;
+  min-width: 0;
+}
+
+/* In "svg" icon style, each category's cell holds the icon dropdown, a
+   color swatch, and a live preview of the two combined, in a row. */
+.styling-svg-icon-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.styling-svg-icon-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.styling-svg-icon-row input[type='color'] {
+  width: 32px;
+  height: 32px;
+  padding: 2px;
+  flex-shrink: 0;
+}
+
+.styling-svg-icon-preview {
+  /* Without an explicit display, a <span> stays inline — width/height
+     are silently ignored on inline elements, so the child <svg>'s own
+     width:100%/height:100% (below) had nothing to resolve against and
+     fell back to the browser's default SVG size (300x150), blowing out
+     this row and the page layout around it. */
+  display: inline-flex;
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+}
+
+.styling-svg-icon-preview svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Checkerboard pattern standing in for OBS's transparent background, so
+   the preview reflects how the pills will actually composite over a
+   scene instead of sitting on an opaque page background. The light
+   variant swaps the checker tone for something visible against a pale
+   scene, e.g. testing a light-on-light preset. */
+.styling-preview-canvas {
+  margin-top: 10px;
+  padding: 32px 24px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 20px;
+  background-size: 20px 20px;
+  background-position: 0 0, 10px 10px;
+}
+
+.styling-preview-canvas-dark {
+  background-color: #1a1a1a;
+  background-image:
+    linear-gradient(45deg, #2a2a2a 25%, transparent 25%),
+    linear-gradient(-45deg, #2a2a2a 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #2a2a2a 75%),
+    linear-gradient(-45deg, transparent 75%, #2a2a2a 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+}
+
+.styling-preview-canvas-light {
+  background-color: #f2f2f2;
+  background-image:
+    linear-gradient(45deg, #dcdcdc 25%, transparent 25%),
+    linear-gradient(-45deg, #dcdcdc 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #dcdcdc 75%),
+    linear-gradient(-45deg, transparent 75%, #dcdcdc 75%);
+  background-size: 20px 20px;
+  background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+}
+
+.styling-presets-grid {
+  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 10px;
+}
+
+.preset-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 12px;
+  font-size: 13px;
+  text-align: left;
+}
+
+.preset-swatch {
+  display: flex;
+  gap: 4px;
+}
+
+.preset-swatch-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
 .control-row {
   display: flex;
   align-items: center;
@@ -588,6 +805,56 @@ footer {
      below), set inline in Overlay.tsx to the timer pill's own
      background — otherwise that strip shows through to the page's
      transparent background instead of blending with the pills. */
+}
+
+/* The rotating stat list's segment (see RotatingStatPill) — a plain
+   .overlay-pill fused into the same merged group as the money/timer
+   pills, just with a fixed min-width so it doesn't visibly resize as it
+   cycles between a 1-digit and a 4-digit count (see .overlay-stats-
+   content, which fades in on every rotation while this stays put). */
+.overlay-stats-pill {
+  justify-content: center;
+  min-width: 108px;
+}
+
+.overlay-stats-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  animation: overlay-stats-fade 0.35s ease;
+}
+
+.overlay-stats-icon {
+  font-size: 24px;
+  line-height: 1;
+  display: inline-flex;
+}
+
+/* In "svg" icon style, .overlay-stats-icon wraps a <StatSvgIcon> instead
+   of emoji text — size it off the same font-size so both styles occupy
+   the same footprint, and let its `color` (set inline per category, see
+   RotatingStatPill) reach the icon via fill="currentColor". */
+.overlay-stats-icon svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+}
+
+.overlay-stats-count {
+  font-size: 26px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes overlay-stats-fade {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .overlay-pill {

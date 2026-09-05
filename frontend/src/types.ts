@@ -74,6 +74,49 @@ export interface Snapshot {
   /** Colors for the public overlays' pills. Always fully populated
    * (server fills in defaults), never partial. */
   overlayColors: OverlayColors
+
+  /** Running totals of this timer's three "gift categories", for the
+   * overlay's optional rotating stat list (see statsRotationEnabled).
+   * subsGiven counts subs plus gifted subs (a 5-sub gift counts as 5);
+   * bitsGiven counts bits/Kicks contributed; donationsGiven counts the
+   * number of tip/donation events, not their dollar total (which
+   * totalMoneyRaised already covers). */
+  subsGiven: number
+  bitsGiven: number
+  donationsGiven: number
+
+  /** Whether the main overlay's rotating stat list (subs/bits-Kicks/
+   * donations, far left of the timer/money pills) is turned on. Off by
+   * default. */
+  statsRotationEnabled: boolean
+
+  /** Which icon the rotating stat list uses per category. Always fully
+   * populated (server fills in defaults), never partial. */
+  statIcons: StatIcons
+}
+
+/** Which of two representations StatIcons' per-category fields hold:
+ * a native emoji character (fixed color, set by the emoji font) or a
+ * monochrome SVG icon key from a fixed set (colorable via the matching
+ * *Color field — see lib/statRotation's SVG_ICON_OPTIONS). */
+export type StatIconStyle = 'emoji' | 'svg'
+
+/** Customizes the overlay's rotating stat list's per-category icon —
+ * see PUT /api/timers/{id}/stat-icons. subs/bits/donations hold either
+ * an emoji character or an SVG icon key depending on style;
+ * subs/bits/donationsColor and outline only take effect when style is
+ * 'svg' — outline swaps every icon (hand-drawn shape or Unicode glyph
+ * alike) from a solid fill to a hollow stroke, shared across all three
+ * categories rather than per-category. */
+export interface StatIcons {
+  style: StatIconStyle
+  outline: boolean
+  subs: string
+  bits: string
+  donations: string
+  subsColor: string
+  bitsColor: string
+  donationsColor: string
 }
 
 /** Hex colors (e.g. "#111111") customizing the public overlays' pills —
