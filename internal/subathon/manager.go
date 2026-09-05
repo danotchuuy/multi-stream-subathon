@@ -120,10 +120,14 @@ func (m *Manager) Create(userID, name string) (*Timer, error) {
 	return t, nil
 }
 
-// RunningByTwitchChannel returns every currently-running timer configured
-// to watch the given Twitch broadcaster ID (see Timer.SetTwitchChannel),
-// for translating an incoming EventSub notification into the timer(s) it
-// should add time to.
+// RunningByTwitchChannel returns every currently-running, not-ended timer
+// configured to watch the given Twitch broadcaster ID (see
+// Timer.SetTwitchChannel), for translating an incoming EventSub
+// notification into the timer(s) it should add time to. An ended timer
+// (see Timer.SetEnded) is excluded regardless of its Running state —
+// this is the "de-register the listeners" half of ending a timer: it
+// simply stops being found here, same as if nothing were watching that
+// channel on its behalf (other timers still watching it are unaffected).
 func (m *Manager) RunningByTwitchChannel(broadcasterID string) []*Timer {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -131,7 +135,7 @@ func (m *Manager) RunningByTwitchChannel(broadcasterID string) []*Timer {
 	var timers []*Timer
 	for _, t := range m.timers {
 		id, _ := t.TwitchChannel()
-		if id == broadcasterID && t.Snapshot().Running {
+		if id == broadcasterID && t.Snapshot().Running && !t.Ended() {
 			timers = append(timers, t)
 		}
 	}
@@ -147,18 +151,22 @@ func (m *Manager) RunningByKickChannel(broadcasterID string) []*Timer {
 	var timers []*Timer
 	for _, t := range m.timers {
 		id, _ := t.KickChannel()
-		if id == broadcasterID && t.Snapshot().Running {
+		if id == broadcasterID && t.Snapshot().Running && !t.Ended() {
 			timers = append(timers, t)
 		}
 	}
 	return timers
 }
 
-// TimersByTwitchChannel returns every timer — running or not — configured
-// to watch the given Twitch broadcaster ID. Unlike RunningByTwitchChannel
-// (used for contribution events, which shouldn't extend a timer nobody's
-// running), chat commands like "!timer unpause" specifically need to
-// reach a *stopped* timer too.
+// TimersByTwitchChannel returns every not-ended timer — running or not —
+// configured to watch the given Twitch broadcaster ID. Unlike
+// RunningByTwitchChannel (used for contribution events, which shouldn't
+// extend a timer nobody's running), chat commands like "!timer play"
+// specifically need to reach a *stopped* timer too — but, like
+// RunningByTwitchChannel, never an ended one: this is what makes "!timer
+// ..." commands stop working once a timer's ended (see
+// handleTwitchChatCommand, the only other caller besides
+// isTwitchChannelEditor).
 func (m *Manager) TimersByTwitchChannel(broadcasterID string) []*Timer {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -166,7 +174,7 @@ func (m *Manager) TimersByTwitchChannel(broadcasterID string) []*Timer {
 	var timers []*Timer
 	for _, t := range m.timers {
 		id, _ := t.TwitchChannel()
-		if id == broadcasterID {
+		if id == broadcasterID && !t.Ended() {
 			timers = append(timers, t)
 		}
 	}

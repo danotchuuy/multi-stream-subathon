@@ -187,6 +187,28 @@ func (s *Service) Identities(userID string) ([]Identity, error) {
 	return s.repo.ListIdentities(userID)
 }
 
+// IdentityByPlatformUser looks up the identity for a specific platform
+// account — not by our own userID, by the platform's own ID for it. ok is
+// false if no account has linked that platform identity. Unlike
+// Identities (used to show/manage the *signed-in* user's own linked
+// accounts), this is for platform integrations that need to act using
+// whichever account happens to own a given platform identity's own
+// delegated OAuth tokens — e.g. youtube.Poller reading a timer's watched
+// YouTube channel's live chat with that channel owner's own linked
+// tokens, since YouTube (unlike Twitch/Kick) has no app-level credential
+// that works for an arbitrary channel.
+func (s *Service) IdentityByPlatformUser(platform Platform, platformUserID string) (Identity, bool, error) {
+	return s.repo.FindIdentity(platform, platformUserID)
+}
+
+// RefreshIdentityTokens persists a refreshed access/refresh token pair
+// for identityID, e.g. after youtube.Poller calls oauth.Provider.Refresh
+// to keep polling past an access token's expiry — exported for the same
+// reason as IdentityByPlatformUser.
+func (s *Service) RefreshIdentityTokens(identityID, accessToken, refreshToken string, expiresAt time.Time) error {
+	return s.repo.UpdateIdentityTokens(identityID, accessToken, refreshToken, expiresAt)
+}
+
 // UnlinkIdentity removes userID's identity on platform, e.g. from an
 // "unlink Twitch" button on the account page. Refuses with
 // ErrLastIdentity if it's their only linked identity — there's no

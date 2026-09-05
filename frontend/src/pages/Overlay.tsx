@@ -44,17 +44,26 @@ export default function Overlay() {
 
   return (
     <div className="overlay">
-      <div className="overlay-pill-group">
+      <div
+        className="overlay-pill-group"
+        style={{ background: colors.timerBg }}
+      >
         {snapshot?.moneyGoal ? (
-          <div
-            className="overlay-pill"
-            style={{ background: colors.moneyBg, color: colors.moneyText }}
-          >
-            <span className="overlay-money-label">
-              ${formatMoney(snapshot.totalMoneyRaised)} / $
-              {formatMoney(snapshot.moneyGoal)}
-            </span>
-          </div>
+          <>
+            <div
+              className="overlay-pill"
+              style={{ background: colors.moneyBg, color: colors.moneyText }}
+            >
+              <span className="overlay-money-label">
+                ${formatMoney(snapshot.totalMoneyRaised)} / $
+                {formatMoney(snapshot.moneyGoal)}
+              </span>
+            </div>
+            <div
+              className="overlay-pill-divider"
+              style={{ background: colors.timerText }}
+            />
+          </>
         ) : null}
         <div
           className="overlay-pill"

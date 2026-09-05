@@ -37,6 +37,14 @@ type Provider struct {
 	// token.
 	ExtraUserInfoHeaders map[string]string
 
+	// ExtraAuthParams are added to the authorize URL as-is, e.g. Google
+	// requires access_type=offline plus prompt=consent for
+	// oauth2.googleapis.com to ever issue a refresh token (see
+	// NewYouTube) — without them it only does on an account's very first
+	// consent, so a later reauth (e.g. after this app loses its stored
+	// tokens) would silently come back with no way to refresh.
+	ExtraAuthParams map[string]string
+
 	// ParseUser extracts the platform's stable user ID and username from
 	// the user-info response body.
 	ParseUser func(body []byte) (platformUserID, username string, err error)
@@ -57,6 +65,9 @@ func (p *Provider) AuthorizeURL(state, codeChallenge string) string {
 	if p.UsePKCE {
 		q.Set("code_challenge", codeChallenge)
 		q.Set("code_challenge_method", "S256")
+	}
+	for k, v := range p.ExtraAuthParams {
+		q.Set(k, v)
 	}
 	return p.AuthURL + "?" + q.Encode()
 }
@@ -80,7 +91,30 @@ func (p *Provider) Exchange(ctx context.Context, code, codeVerifier string) (acc
 	if p.UsePKCE {
 		form.Set("code_verifier", codeVerifier)
 	}
+	return p.doTokenRequest(ctx, form)
+}
 
+// Refresh trades a still-valid refresh token for a new access token
+// (and, depending on the provider, a new refresh token — some rotate it
+// on every use, so callers must persist whatever comes back rather than
+// assuming the original refresh token stays valid), without a fresh
+// authorization-code flow. Used to keep a long-lived background
+// integration (e.g. StreamElements' tip poller — see
+// streamelements.Poller) working past its access token's expiry.
+func (p *Provider) Refresh(ctx context.Context, refreshToken string) (accessToken, newRefreshToken string, expiresAt time.Time, err error) {
+	form := url.Values{
+		"client_id":     {p.ClientID},
+		"client_secret": {p.ClientSecret},
+		"grant_type":    {"refresh_token"},
+		"refresh_token": {refreshToken},
+	}
+	return p.doTokenRequest(ctx, form)
+}
+
+// doTokenRequest POSTs form to p.TokenURL and parses the resulting
+// token response — the mechanics shared by Exchange (grant_type=
+// authorization_code) and Refresh (grant_type=refresh_token).
+func (p *Provider) doTokenRequest(ctx context.Context, form url.Values) (accessToken, refreshToken string, expiresAt time.Time, err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, p.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", "", time.Time{}, fmt.Errorf("%s: build token request: %w", p.Name, err)
@@ -99,7 +133,7 @@ func (p *Provider) Exchange(ctx context.Context, code, codeVerifier string) (acc
 		return "", "", time.Time{}, fmt.Errorf("%s: read token response: %w", p.Name, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", "", time.Time{}, fmt.Errorf("%s: token exchange failed (%d): %s", p.Name, resp.StatusCode, body)
+		return "", "", time.Time{}, fmt.Errorf("%s: token request failed (%d): %s", p.Name, resp.StatusCode, body)
 	}
 
 	var tok tokenResponse
@@ -160,10 +194,18 @@ func PKCEChallenge(verifier string) string {
 type FlowState struct {
 	Provider string
 	// Purpose is "login" (sign up or log in as whoever this identity
-	// belongs to) or "link" (attach this identity to the already
-	// logged-in UserID).
-	Purpose      string
-	UserID       string
+	// belongs to), "link" (attach this identity to the already
+	// logged-in UserID), or "streamelements" (connect TimerID's tip
+	// polling to whichever StreamElements account authorizes — see
+	// internal/server/streamelements_oauth.go).
+	Purpose string
+	UserID  string
+	// TimerID is set only for Purpose == "streamelements": which timer
+	// this connection is for. Unlike "login"/"link", this flow isn't
+	// about the app's own account system, so it has no UserID of its
+	// own — the timer's owner-or-moderator check already happened when
+	// the flow started (see handleStreamElementsOAuthStart).
+	TimerID      string
 	CodeVerifier string
 	ExpiresAt    time.Time
 }

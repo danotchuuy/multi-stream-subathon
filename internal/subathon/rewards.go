@@ -5,12 +5,19 @@ package subathon
 type RewardItem string
 
 const (
-	RewardTier1Sub  RewardItem = "tier1_sub"
-	RewardTier2Sub  RewardItem = "tier2_sub"
-	RewardTier3Sub  RewardItem = "tier3_sub"
-	RewardGiftedSub RewardItem = "gifted_sub"
-	RewardBits100   RewardItem = "bits_100"      // per 100 bits (Twitch) / Kicks (Kick)
-	RewardDonation  RewardItem = "donation_unit" // per $1 donated/Super Chat'd
+	RewardTier1Sub RewardItem = "tier1_sub"
+	RewardTier2Sub RewardItem = "tier2_sub"
+	RewardTier3Sub RewardItem = "tier3_sub"
+	// RewardGiftedSub is a flat (untiered) gifted sub — Kick and YouTube
+	// don't distinguish gift tiers the way Twitch does (see
+	// kick.ParseNotification), so their gifted subs are priced with this
+	// single rate rather than RewardGiftedTier1/2/3Sub.
+	RewardGiftedSub      RewardItem = "gifted_sub"
+	RewardGiftedTier1Sub RewardItem = "gifted_tier1_sub"
+	RewardGiftedTier2Sub RewardItem = "gifted_tier2_sub"
+	RewardGiftedTier3Sub RewardItem = "gifted_tier3_sub"
+	RewardBits100        RewardItem = "bits_100"      // per 100 bits (Twitch) / Kicks (Kick)
+	RewardDonation       RewardItem = "donation_unit" // per $1 donated/Super Chat'd
 )
 
 // RewardItems is every reward item, in display order.
@@ -19,6 +26,9 @@ var RewardItems = []RewardItem{
 	RewardTier2Sub,
 	RewardTier3Sub,
 	RewardGiftedSub,
+	RewardGiftedTier1Sub,
+	RewardGiftedTier2Sub,
+	RewardGiftedTier3Sub,
 	RewardBits100,
 	RewardDonation,
 }
@@ -26,10 +36,11 @@ var RewardItems = []RewardItem{
 // RewardPlatforms is every platform reward rates are configured for. It
 // excludes PlatformManual: manual test events specify their own seconds
 // directly rather than looking up a rule. Only RewardDonation is ever
-// actually looked up for PlatformStreamElements (see the streamelements
-// package's poller) — the sub/bits items still get a configurable row for
-// grid consistency, they just never fire for that platform.
-var RewardPlatforms = []Platform{PlatformTwitch, PlatformKick, PlatformYouTube, PlatformStreamElements}
+// actually looked up for PlatformStreamElements/PlatformThrone (see the
+// streamelements package's poller and internal/server/throne_webhook.go)
+// — the sub/bits items still get a configurable row for grid consistency,
+// they just never fire for those platforms.
+var RewardPlatforms = []Platform{PlatformTwitch, PlatformKick, PlatformYouTube, PlatformStreamElements, PlatformThrone}
 
 // RewardRules maps how many seconds a contribution is worth, keyed by
 // [item][platform]. One set of rules is stored per user and applied when a
@@ -41,12 +52,15 @@ type RewardRules map[RewardItem]map[Platform]int
 // used to fill in any item/platform pair a user hasn't configured yet.
 func DefaultRewardRules() RewardRules {
 	defaults := map[RewardItem]int{
-		RewardTier1Sub:  300,
-		RewardTier2Sub:  600,
-		RewardTier3Sub:  1500,
-		RewardGiftedSub: 300,
-		RewardBits100:   60,
-		RewardDonation:  60,
+		RewardTier1Sub:       300,
+		RewardTier2Sub:       600,
+		RewardTier3Sub:       1500,
+		RewardGiftedSub:      300,
+		RewardGiftedTier1Sub: 300,
+		RewardGiftedTier2Sub: 600,
+		RewardGiftedTier3Sub: 1500,
+		RewardBits100:        60,
+		RewardDonation:       60,
 	}
 
 	rules := make(RewardRules, len(RewardItems))

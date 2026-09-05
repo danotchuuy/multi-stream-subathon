@@ -1,7 +1,8 @@
 // Package twitch subscribes to Twitch EventSub (via webhook transport) for
-// a broadcaster's subs, gift subs, cheers, and moderator chat commands,
-// translating their webhook notifications into subathon.Event (or, for
-// chat commands, a direct timer action) using a timer's reward rules.
+// a broadcaster's subs, resubs, gift subs, cheers, and moderator chat
+// commands, translating their webhook notifications into subathon.Event
+// (or, for chat commands, a direct timer action) using a timer's reward
+// rules.
 //
 // NOTE on an alternative considered and deliberately not taken for subs/
 // gift subs specifically: they could instead be read off
@@ -57,6 +58,7 @@ const (
 // parsing in ParseNotification to match.
 var subscriptionTypes = []struct{ typ, version string }{
 	{"channel.subscribe", "1"},
+	{"channel.subscription.message", "1"},
 	{"channel.subscription.gift", "1"},
 	{"channel.cheer", "1"},
 }
@@ -462,11 +464,29 @@ func ParseNotification(subscriptionType string, body []byte) (ParsedEvent, bool,
 			Count:             1,
 		}, true, nil
 
+	case "channel.subscription.message":
+		var e struct {
+			UserName          string `json:"user_name"`
+			BroadcasterUserID string `json:"broadcaster_user_id"`
+			Tier              string `json:"tier"`
+		}
+		if err := json.Unmarshal(envelope.Event, &e); err != nil {
+			return ParsedEvent{}, false, fmt.Errorf("parse channel.subscription.message event: %w", err)
+		}
+		return ParsedEvent{
+			BroadcasterUserID: e.BroadcasterUserID,
+			Item:              tierToItem(e.Tier),
+			Type:              subathon.EventResub,
+			Username:          e.UserName,
+			Count:             1,
+		}, true, nil
+
 	case "channel.subscription.gift":
 		var e struct {
 			UserName          string `json:"user_name"`
 			BroadcasterUserID string `json:"broadcaster_user_id"`
 			Total             int    `json:"total"`
+			Tier              string `json:"tier"`
 			IsAnonymous       bool   `json:"is_anonymous"`
 		}
 		if err := json.Unmarshal(envelope.Event, &e); err != nil {
@@ -478,7 +498,7 @@ func ParseNotification(subscriptionType string, body []byte) (ParsedEvent, bool,
 		}
 		return ParsedEvent{
 			BroadcasterUserID: e.BroadcasterUserID,
-			Item:              subathon.RewardGiftedSub,
+			Item:              giftedTierToItem(e.Tier),
 			Type:              subathon.EventGiftedSub,
 			Username:          username,
 			Count:             e.Total,
@@ -522,15 +542,32 @@ func tierToItem(tier string) subathon.RewardItem {
 	}
 }
 
+// giftedTierToItem is tierToItem's equivalent for a channel.subscription.gift
+// event's own "tier" field — gifted subs are tiered the same way regular
+// subs are on Twitch.
+func giftedTierToItem(tier string) subathon.RewardItem {
+	switch tier {
+	case "2000":
+		return subathon.RewardGiftedTier2Sub
+	case "3000":
+		return subathon.RewardGiftedTier3Sub
+	default: // "1000"
+		return subathon.RewardGiftedTier1Sub
+	}
+}
+
 // chatCommandNames is every word ParseChatCommand recognizes as a timer
-// command when it follows a "!timer " prefix, e.g. "!timer pause".
+// command when it follows a "!timer " prefix, e.g. "!timer play".
+// Deliberately has no "end"/"unend" entry — ending a timer (see
+// subathon.Timer.SetEnded) is dashboard-only, precisely so it can't be
+// triggered (or, worse, undone) by anyone with chat access.
 var chatCommandNames = map[string]bool{
-	"pause":   true,
-	"unpause": true,
-	"lock":    true,
-	"unlock":  true,
-	"hide":    true,
-	"unhide":  true,
+	"pause":  true,
+	"play":   true,
+	"lock":   true,
+	"unlock": true,
+	"hide":   true,
+	"show":   true,
 }
 
 // chatCommandPrefix is the first word a chat message must start with

@@ -1,11 +1,14 @@
 // Package streamelements polls StreamElements' REST API for a channel's
 // recent tips (donations), translating them into subathon.Event using a
-// timer's reward/money rules — see Poller in poller.go. Unlike Twitch/Kick,
-// there's no server-level app credential: each timer owner supplies their
-// own account's JWT token (from
-// streamelements.com/dashboard/account/channels), scoped to their own
-// StreamElements channel, so every call here takes it as a parameter
-// rather than the package holding one Config for the whole server.
+// timer's reward/money rules — see Poller in poller.go. Each timer owner
+// connects their own StreamElements account via OAuth2 (see
+// internal/server/streamelements_oauth.go, which uses this server's own
+// registered app credential — internal/oauth.NewStreamElements — to
+// obtain a per-timer access token scoped to that owner's channel), so
+// every call here still takes the resulting access token as a parameter
+// rather than the package holding one Config for the whole server. This
+// replaces an earlier version of this integration that had the owner
+// paste in their account's long-lived JWT token directly.
 //
 // NOTE on why this polls instead of using StreamElements' real-time
 // gateway (wss://realtime.streamelements.com, Socket.IO 2.x/Engine.IO 3
@@ -36,19 +39,22 @@ import (
 var apiBase = "https://api.streamelements.com/kappa/v2"
 
 // Client is a thin wrapper around StreamElements' REST API. It holds no
-// per-account state itself — every call takes the caller's own JWT token
-// (see package doc) — so one Client is shared across every timer.
+// per-account state itself — every call takes the caller's own OAuth2
+// access token (see package doc) — so one Client is shared across every
+// timer.
 type Client struct {
 	hc *http.Client
 }
 
-// NewClient builds a Client ready to use; no configuration needed since
-// StreamElements has no server-level app credential here.
+// NewClient builds a Client ready to use; no configuration needed here —
+// the server-level app credential this integration now needs (see
+// package doc) lives on the internal/oauth.Provider that drives the
+// connect flow, not on this REST API wrapper.
 func NewClient() *Client {
 	return &Client{hc: &http.Client{Timeout: 15 * time.Second}}
 }
 
-// Account is the channel identity a JWT token resolves to (see
+// Account is the channel identity an access token resolves to (see
 // ResolveChannel) — enough to confirm to a timer owner which
 // StreamElements account they just connected, and to address RecentTips.
 type Account struct {
@@ -57,8 +63,9 @@ type Account struct {
 }
 
 // ResolveChannel validates token and returns the StreamElements channel it
-// belongs to, via GET /channels/me. Also serves as the save-time
-// validation for a newly entered token: an invalid/expired one fails here
+// belongs to, via GET /channels/me. Called right after exchanging an
+// OAuth2 code (see internal/server/streamelements_oauth.go) to identify
+// which channel just authorized — an invalid/expired token fails here
 // with a clear error instead of silently never producing any tips.
 func (c *Client) ResolveChannel(token string) (Account, error) {
 	var resp struct {
@@ -141,7 +148,10 @@ func (c *Client) get(token, endpoint string, out any) error {
 	if err != nil {
 		return fmt.Errorf("build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	// OAuth2 access tokens are sent with StreamElements' own "oAuth"
+	// scheme, not the standard "Bearer" — see internal/oauth.
+	// NewStreamElements.
+	req.Header.Set("Authorization", "oAuth "+token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.hc.Do(req)

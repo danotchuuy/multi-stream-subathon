@@ -31,20 +31,36 @@ type TimerRecord struct {
 	KickBroadcasterID       string
 	KickBroadcasterUsername string
 
-	// StreamElementsToken/StreamElementsChannelID/
+	// YouTubeChannelID/YouTubeChannelTitle identify the YouTube channel
+	// (if any) this timer watches for live events (see
+	// Timer.SetYouTubeChannel). Empty means none configured.
+	YouTubeChannelID    string
+	YouTubeChannelTitle string
+
+	// StreamElementsToken/StreamElementsRefreshToken/
+	// StreamElementsTokenExpiresAt/StreamElementsChannelID/
 	// StreamElementsDisplayName identify the StreamElements account (if
-	// any) this timer polls for tips (see Timer.SetStreamElementsAccount).
-	// Unlike the Twitch/Kick fields above, StreamElementsToken is a
-	// secret and must never be returned from any API response.
-	StreamElementsToken       string
-	StreamElementsChannelID   string
-	StreamElementsDisplayName string
+	// any) this timer polls for tips (see Timer.SetStreamElementsAccount)
+	// — an OAuth2 access/refresh token pair obtained via
+	// internal/server/streamelements_oauth.go, refreshed by
+	// streamelements.Poller as StreamElementsTokenExpiresAt approaches.
+	// Unlike the Twitch/Kick fields above, StreamElementsToken/
+	// StreamElementsRefreshToken are secrets and must never be returned
+	// from any API response.
+	StreamElementsToken          string
+	StreamElementsRefreshToken   string
+	StreamElementsTokenExpiresAt time.Time
+	StreamElementsChannelID      string
+	StreamElementsDisplayName    string
 
 	// Locked/Hidden are toggled via the dashboard or a channel
 	// moderator's "!timer lock"/"!timer unlock"/"!timer hide"/
-	// "!timer unhide" chat command; see Timer.SetLocked/SetHidden.
+	// "!timer show" chat command; see Timer.SetLocked/SetHidden.
 	Locked bool
 	Hidden bool
+
+	// Ended is toggled from the dashboard only — see Timer.SetEnded.
+	Ended bool
 
 	// OverlayTimerBg/OverlayTimerText/OverlayMoneyBg/OverlayMoneyText/
 	// OverlayGoalBg/OverlayGoalText/OverlayGoalAmountBg/
@@ -83,6 +99,10 @@ type Repo interface {
 
 	// InsertEvent records a contributor event against a timer.
 	InsertEvent(e Event) error
+
+	// DeleteEvent removes a previously recorded event. Not an error if no
+	// event with that ID exists for timerID.
+	DeleteEvent(timerID, eventID string) error
 
 	// RecentEvents returns up to limit of a timer's most recent events,
 	// newest first.

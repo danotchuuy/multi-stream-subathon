@@ -10,10 +10,8 @@ const PROVIDER_LABELS: Record<AuthPlatform, string> = {
   youtube: 'YouTube',
 }
 
-// Platforms that can be linked via OAuth today. YouTube isn't wired up
-// yet (see internal/oauth), so it's left off this list rather than
-// linking to a 404.
-const LINKABLE_PLATFORMS: AuthPlatform[] = ['twitch', 'kick']
+// Platforms that can be linked via OAuth today.
+const LINKABLE_PLATFORMS: AuthPlatform[] = ['twitch', 'kick', 'youtube']
 
 const ERROR_MESSAGES: Record<string, string> = {
   already_linked: 'That account is already linked to a different user.',

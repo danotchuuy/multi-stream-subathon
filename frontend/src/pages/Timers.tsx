@@ -17,7 +17,11 @@ export default function Timers() {
       .catch(() => setTimers([]))
   }
 
-  useEffect(refresh, [])
+  // Only logged-in users have any timers to list — skip the (otherwise
+  // 401ing) fetch entirely while logged out or still loading auth state.
+  useEffect(() => {
+    if (user) refresh()
+  }, [user])
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -34,51 +38,78 @@ export default function Timers() {
   return (
     <div className="dashboard">
       <header>
-        <h1>Subathon Timers</h1>
+        <div>
+          <h1>Multi Stream Subathon</h1>
+          <p className="tagline">
+            Run a countdown clock that extends automatically from subs,
+            gifted subs, bits/Kicks, Super Chats, and donations — across
+            Twitch, Kick, and YouTube at once. Control it from one
+            dashboard and display it with an OBS browser-source overlay.
+          </p>
+        </div>
         <div className="header-links">
-          <Link to="/account" className="back-link">
-            {user?.displayName ?? 'Account'}
-          </Link>
+          {user ? (
+            <Link to="/account" className="back-link">
+              {user.displayName}
+            </Link>
+          ) : (
+            <Link to="/login" className="login-link">
+              Log in
+            </Link>
+          )}
         </div>
       </header>
 
-      <section className="events">
-        {timers === null ? (
-          <p className="empty">Loading…</p>
-        ) : timers.length === 0 ? (
-          <p className="empty">No timers yet. Create one below.</p>
-        ) : (
-          <ul className="timer-list">
-            {timers.map((t) => (
-              <li key={t.id}>
-                <Link to={`/t/${t.id}`}>{t.name}</Link>
-                {!t.owner && <span className="platform">moderator</span>}
-                <span className={t.running ? 'status-ok' : 'status-down'}>
-                  {t.running ? 'running' : 'stopped'}
-                </span>
-                <span>{formatDuration(t.remainingSecs)}</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      {user === undefined ? (
+        <p className="empty">Loading…</p>
+      ) : user === null ? (
+        <section className="events">
+          <p className="empty">
+            Log in with Twitch, Kick, or YouTube to view or create your
+            subathon timers.
+          </p>
+        </section>
+      ) : (
+        <>
+          <section className="events">
+            {timers === null ? (
+              <p className="empty">Loading…</p>
+            ) : timers.length === 0 ? (
+              <p className="empty">No timers yet. Create one below.</p>
+            ) : (
+              <ul className="timer-list">
+                {timers.map((t) => (
+                  <li key={t.id}>
+                    <Link to={`/t/${t.id}`}>{t.name}</Link>
+                    {!t.owner && <span className="platform">moderator</span>}
+                    <span className={t.running ? 'status-ok' : 'status-down'}>
+                      {t.running ? 'running' : 'stopped'}
+                    </span>
+                    <span>{formatDuration(t.remainingSecs)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
 
-      <section className="controls">
-        <form className="control-group" onSubmit={handleCreate}>
-          <label>
-            New timer name
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Main"
-            />
-          </label>
-          <button type="submit" disabled={busy}>
-            Create timer
-          </button>
-        </form>
-      </section>
+          <section className="controls">
+            <form className="control-group" onSubmit={handleCreate}>
+              <label>
+                New timer name
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Main"
+                />
+              </label>
+              <button type="submit" disabled={busy}>
+                Create timer
+              </button>
+            </form>
+          </section>
+        </>
+      )}
     </div>
   )
 }

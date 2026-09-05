@@ -1,0 +1,25 @@
+# Keep the build context small and avoid ever sending local secrets or
+# database data into a build.
+
+.git
+.gitignore
+.dockerignore
+Dockerfile
+README.md
+LICENSE
+
+bin/
+*.test
+*.out
+
+frontend/node_modules/
+frontend/dist/
+
+data/
+*.db
+*.db-shm
+*.db-wal
+
+.idea/
+.vscode/
+.DS_Store

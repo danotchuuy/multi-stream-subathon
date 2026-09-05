@@ -27,6 +27,13 @@ func mountAuthRoutes(r chi.Router, deps Deps) {
 	r.Post("/auth/logout", handleLogout(deps))
 	r.Get("/api/auth/providers", handleAuthProviders(deps))
 
+	// StreamElements' connect flow is per-timer, not tied to this app's
+	// own login/account system the way {provider}/start above is (see
+	// streamelements_oauth.go) — it needs its own start route, mounted
+	// under /api/timers/{timerID}/... instead, but shares this same
+	// fixed public callback shape/pattern.
+	r.Get("/auth/streamelements/callback", handleStreamElementsOAuthCallback(deps))
+
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth(deps.Auth))
 		r.Get("/api/me", handleMe(deps.Auth))
@@ -135,6 +142,34 @@ func handleOAuthCallback(deps Deps) http.HandlerFunc {
 
 		platform := auth.Platform(providerName)
 
+		// Resolve which app account this identity belongs to *before*
+		// touching Twitch subscriptions below, which need it to check
+		// that account's editor access to a timer — link already knows
+		// it (fs.UserID, the already-logged-in user doing the linking);
+		// login/signup is what establishes it.
+		var appUserID string
+		if fs.Purpose == "link" {
+			err := deps.Auth.LinkIdentity(fs.UserID, platform, platformUserID, platformUsername, accessToken, refreshToken, expiresAt)
+			if err != nil {
+				log.Printf("oauth: link %s: %v", providerName, err)
+				msg := "link_failed"
+				if errors.Is(err, auth.ErrIdentityLinkedElsewhere) {
+					msg = "already_linked"
+				}
+				redirectWithError(w, r, deps.AllowedOrigin+"/account", msg)
+				return
+			}
+			appUserID = fs.UserID
+		} else {
+			user, err := deps.Auth.LoginOrSignup(platform, platformUserID, platformUsername, accessToken, refreshToken, expiresAt)
+			if err != nil {
+				log.Printf("oauth: login/signup %s: %v", providerName, err)
+				redirectWithError(w, r, deps.AllowedOrigin+"/login", "oauth_failed")
+				return
+			}
+			appUserID = user.ID
+		}
+
 		// Twitch requires the broadcaster (or one of their moderators) to
 		// have granted channel:read:subscriptions/bits:read (see
 		// oauth.NewTwitch) before an EventSub subscription for that
@@ -142,16 +177,32 @@ func handleOAuthCallback(deps Deps) http.HandlerFunc {
 		// authorizes — on both login and link, since either can be how a
 		// Twitch identity first appears on the account — for their own
 		// channel and, in case they're moderating someone else's, every
-		// channel Twitch says they moderate. Best-effort throughout: a
-		// failure here shouldn't break login/linking.
+		// channel Twitch says they moderate.
+		//
+		// Twitch's own broadcaster/moderator status on a channel is not,
+		// by itself, reason enough for this app to start pulling that
+		// channel's sub/gift/cheer data: it would mean any Twitch account
+		// that happens to broadcast or moderate some channel gets that
+		// channel silently subscribed the moment they sign into this app,
+		// whether or not they have anything to do with a timer here. So
+		// this only proceeds for a channel this app already has a timer
+		// configured to watch (see Timer.SetTwitchChannel) where this
+		// account is the owner or a moderator — an "editor" of that
+		// timer, same bar as requireOwnerOrModerator. Best-effort
+		// throughout: a failure here shouldn't break login/linking.
 		if providerName == "twitch" && deps.Twitch != nil {
-			if err := deps.Twitch.EnsureBroadcasterSubscriptions(platformUserID); err != nil {
-				log.Printf("twitch: ensure eventsub subscriptions for %s: %v", platformUserID, err)
+			if isTwitchChannelEditor(deps, appUserID, platformUserID) {
+				if err := deps.Twitch.EnsureBroadcasterSubscriptions(platformUserID); err != nil {
+					log.Printf("twitch: ensure eventsub subscriptions for %s: %v", platformUserID, err)
+				}
 			}
 			if modChannels, err := deps.Twitch.ModeratedChannels(accessToken, platformUserID); err != nil {
 				log.Printf("twitch: list moderated channels for %s: %v", platformUserID, err)
 			} else {
 				for _, ch := range modChannels {
+					if !isTwitchChannelEditor(deps, appUserID, ch.BroadcasterID) {
+						continue
+					}
 					if err := deps.Twitch.EnsureBroadcasterSubscriptions(ch.BroadcasterID); err != nil {
 						log.Printf("twitch: ensure eventsub subscriptions for moderated channel %s: %v", ch.BroadcasterID, err)
 					}
@@ -165,28 +216,11 @@ func handleOAuthCallback(deps Deps) http.HandlerFunc {
 		// here — activation happens entirely from handleSetKickChannel.
 
 		if fs.Purpose == "link" {
-			err := deps.Auth.LinkIdentity(fs.UserID, platform, platformUserID, platformUsername, accessToken, refreshToken, expiresAt)
-			if err != nil {
-				log.Printf("oauth: link %s: %v", providerName, err)
-				msg := "link_failed"
-				if errors.Is(err, auth.ErrIdentityLinkedElsewhere) {
-					msg = "already_linked"
-				}
-				redirectWithError(w, r, deps.AllowedOrigin+"/account", msg)
-				return
-			}
 			http.Redirect(w, r, deps.AllowedOrigin+"/account", http.StatusFound)
 			return
 		}
 
-		user, err := deps.Auth.LoginOrSignup(platform, platformUserID, platformUsername, accessToken, refreshToken, expiresAt)
-		if err != nil {
-			log.Printf("oauth: login/signup %s: %v", providerName, err)
-			redirectWithError(w, r, deps.AllowedOrigin+"/login", "oauth_failed")
-			return
-		}
-
-		raw, err := deps.Auth.CreateSession(user.ID)
+		raw, err := deps.Auth.CreateSession(appUserID)
 		if err != nil {
 			log.Printf("oauth: create session: %v", err)
 			redirectWithError(w, r, deps.AllowedOrigin+"/login", "oauth_failed")
@@ -321,6 +355,23 @@ func requireOwnerOrModerator() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// isTwitchChannelEditor reports whether userID (an app account, not a
+// Twitch ID) owns or moderates at least one timer already configured to
+// watch the Twitch broadcaster broadcasterID (see Timer.SetTwitchChannel)
+// — the same owner-or-moderator bar requireOwnerOrModerator enforces over
+// HTTP, checked directly here since handleOAuthCallback's use is driven
+// by Twitch's own moderated-channels list rather than a {timerID} in the
+// URL. Used to gate which channels a Twitch identity's login/link is
+// allowed to trigger EventSub subscriptions for.
+func isTwitchChannelEditor(deps Deps, userID, broadcasterID string) bool {
+	for _, t := range deps.Manager.TimersByTwitchChannel(broadcasterID) {
+		if t.UserID() == userID || t.IsModerator(userID) {
+			return true
+		}
+	}
+	return false
 }
 
 func userFromRequest(svc *auth.Service, r *http.Request) (auth.User, bool) {

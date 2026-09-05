@@ -12,9 +12,7 @@ export function formatDuration(totalSeconds: number): string {
   return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`
 }
 
-/** Formats a dollar amount rounded to the nearest whole dollar, e.g. 500
- * rather than 500.00 — this app's contributions are cheap enough (bits,
- * Kicks, sub tiers) that cents aren't meaningful once totaled. */
+/** Formats a dollar amount with 2 decimal places, e.g. 4.75 rather than 5. */
 export function formatMoney(amount: number): string {
-  return Math.round(amount).toString()
+  return amount.toFixed(2)
 }

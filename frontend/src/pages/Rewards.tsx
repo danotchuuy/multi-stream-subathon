@@ -10,22 +10,43 @@ import {
 } from '../lib/api'
 import type { MoneyMilestone, RewardItem, RewardPlatform } from '../types'
 
-const PLATFORMS: RewardPlatform[] = ['twitch', 'kick', 'youtube', 'streamelements']
+const PLATFORMS: RewardPlatform[] = ['twitch', 'kick', 'youtube', 'streamelements', 'throne']
 
 const PLATFORM_LABELS: Record<RewardPlatform, string> = {
   twitch: 'Twitch',
   kick: 'Kick',
   youtube: 'YouTube',
   streamelements: 'StreamElements',
+  throne: 'Throne',
 }
 
-const ITEMS: { key: RewardItem; label: string }[] = [
-  { key: 'tier1_sub', label: 'Tier 1 sub' },
-  { key: 'tier2_sub', label: 'Tier 2 sub' },
-  { key: 'tier3_sub', label: 'Tier 3 sub' },
-  { key: 'gifted_sub', label: 'Gifted sub' },
-  { key: 'bits_100', label: 'Bits / Kicks (per 100)' },
-  { key: 'donation_unit', label: 'Donation (per $1)' },
+/** Every reward item, in display order, and which platforms it's actually
+ * meaningful for — a row's cell is left blank for any platform not
+ * listed. Kick and YouTube don't have Twitch-style sub tiers (Kick prices
+ * every sub as RewardTier1Sub — see kick.ParseNotification — and YouTube
+ * has no tiers at all), so only the tier-1 row applies to them; Twitch's
+ * gifted subs are tiered the same way regular subs are (see
+ * twitch.giftedTierToItem), so the tiered gifted rows are Twitch-only and
+ * the flat "Gifted sub" row is for Kick/YouTube instead. Bits/Kicks are
+ * a Twitch/Kick-only cash-equivalent action — YouTube has no such thing
+ * (see RewardBits100's own doc comment, which only ever mentions
+ * Twitch/Kick) — so that row is Twitch/Kick-only too. StreamElements and
+ * Throne only ever fire a donation (see the streamelements poller and
+ * internal/server/throne_webhook.go), so it's donation-only here too. */
+const ITEMS: { key: RewardItem; label: string; platforms: RewardPlatform[] }[] = [
+  { key: 'tier1_sub', label: 'Tier 1 sub', platforms: ['twitch', 'kick', 'youtube'] },
+  { key: 'tier2_sub', label: 'Tier 2 sub', platforms: ['twitch'] },
+  { key: 'tier3_sub', label: 'Tier 3 sub', platforms: ['twitch'] },
+  { key: 'gifted_tier1_sub', label: 'Gifted tier 1 sub', platforms: ['twitch'] },
+  { key: 'gifted_tier2_sub', label: 'Gifted tier 2 sub', platforms: ['twitch'] },
+  { key: 'gifted_tier3_sub', label: 'Gifted tier 3 sub', platforms: ['twitch'] },
+  { key: 'gifted_sub', label: 'Gifted sub', platforms: ['kick', 'youtube'] },
+  { key: 'bits_100', label: 'Bits / Kicks (per 100)', platforms: ['twitch', 'kick'] },
+  {
+    key: 'donation_unit',
+    label: 'Donation (per $1)',
+    platforms: ['twitch', 'kick', 'youtube', 'streamelements', 'throne'],
+  },
 ]
 
 /** Rules mapping a RewardItem, per platform, to a number — the shape
@@ -61,7 +82,7 @@ function RulesGrid({
 
   const handleChange = (
     item: RewardItem,
-    platform: AuthPlatform,
+    platform: RewardPlatform,
     value: string,
   ) => {
     setRules((prev) => {
@@ -112,20 +133,26 @@ function RulesGrid({
             </tr>
           </thead>
           <tbody>
-            {ITEMS.map(({ key, label }) => (
+            {ITEMS.map(({ key, label, platforms }) => (
               <tr key={key}>
                 <th scope="row">{label}</th>
-                {PLATFORMS.map((p) => (
-                  <td key={p}>
-                    <input
-                      type="number"
-                      min={0}
-                      step={step}
-                      value={rules[key]?.[p] ?? 0}
-                      onChange={(e) => handleChange(key, p, e.target.value)}
-                    />
-                  </td>
-                ))}
+                {PLATFORMS.map((p) =>
+                  platforms.includes(p) ? (
+                    <td key={p}>
+                      <input
+                        type="number"
+                        min={0}
+                        step={step}
+                        value={rules[key]?.[p] ?? 0}
+                        onChange={(e) => handleChange(key, p, e.target.value)}
+                      />
+                    </td>
+                  ) : (
+                    <td key={p} className="reward-table-na">
+                      &mdash;
+                    </td>
+                  ),
+                )}
               </tr>
             ))}
           </tbody>
@@ -294,7 +321,7 @@ export default function Rewards() {
   }
 
   return (
-    <div className="dashboard">
+    <div className="dashboard dashboard-wide">
       <header>
         <div>
           <Link to={`/t/${timerId}`} className="back-link">
@@ -311,7 +338,9 @@ export default function Rewards() {
           gift subs, and cheers apply these automatically once the channel is
           linked in Account settings; StreamElements tips apply the
           "Donation (per $1)" row automatically once a token is connected on
-          the dashboard. Other platforms/manual entries still need a bot or
+          the dashboard, and Throne gifts/contributions apply it once the
+          webhook URL is set up in Throne (see the dashboard's setup
+          instructions). Other platforms/manual entries still need a bot or
           manual event for now.
         </p>
         <RulesGrid

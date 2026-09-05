@@ -7,6 +7,7 @@ import GoalsOverlay from './pages/GoalsOverlay'
 import History from './pages/History'
 import Login from './pages/Login'
 import Overlay from './pages/Overlay'
+import Privacy from './pages/Privacy'
 import Rewards from './pages/Rewards'
 import Timers from './pages/Timers'
 
@@ -16,6 +17,10 @@ export default function App() {
       <AuthProvider>
         <Routes>
           <Route path="/login" element={<Login />} />
+          {/* Public: linked from Login and from Google/Twitch/Kick's own
+              OAuth app registration (a "Privacy Policy URL" field), so it
+              must be reachable with no session. */}
+          <Route path="/privacy" element={<Privacy />} />
           {/* Public: the timer ID in the URL is the token an OBS overlay
               or shared dashboard link needs, no login required. */}
           <Route path="/t/:timerId/overlay" element={<Overlay />} />
@@ -28,14 +33,10 @@ export default function App() {
               list, just uncapped. */}
           <Route path="/t/:timerId/history" element={<History />} />
 
-          <Route
-            path="/"
-            element={
-              <RequireAuth>
-                <Timers />
-              </RequireAuth>
-            }
-          />
+          {/* Public: shows a login option in the header rather than
+              force-redirecting to /login when logged out — see Timers,
+              which renders its own logged-out state. */}
+          <Route path="/" element={<Timers />} />
           <Route
             path="/account"
             element={

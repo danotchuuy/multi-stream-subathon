@@ -72,8 +72,8 @@ type setTwitchChannelRequest struct {
 
 // handleSetTwitchChannel changes which Twitch channel's subs/gift-subs/
 // cheers add time to this timer, and which channel's chat this timer
-// listens to for "!timer pause"/"!timer unpause"/"!timer lock"/
-// "!timer unlock"/"!timer hide"/"!timer unhide" commands from that
+// listens to for "!timer pause"/"!timer play"/"!timer lock"/
+// "!timer unlock"/"!timer hide"/"!timer show" commands from that
 // channel's moderators/broadcaster. Resolves the given login
 // name to a broadcaster ID via Twitch, then (best-effort) ensures EventSub
 // subscriptions for it: the sub/gift/cheer ones only succeed once that
@@ -273,13 +273,15 @@ func handleTwitchNotification(deps Deps, messageID string, body []byte) {
 }
 
 // handleTwitchChatCommand parses a channel.chat.message notification for a
-// recognized "!timer pause"/"!timer unpause"/"!timer lock"/
-// "!timer unlock"/"!timer hide"/"!timer unhide" command from that
+// recognized "!timer pause"/"!timer play"/"!timer lock"/
+// "!timer unlock"/"!timer hide"/"!timer show" command from that
 // channel's own moderator/broadcaster (see twitch.ParseChatCommand — the
 // permission check happens there, off the message's own badge data) and
 // applies it to every timer watching that channel, running or not (unlike
-// contribution events, "!timer unpause" specifically needs to reach a
-// *stopped* timer).
+// contribution events, "!timer play" specifically needs to reach a
+// *stopped* timer) — but never an *ended* one: Manager.TimersByTwitchChannel
+// already excludes those, which is what makes "!timer ..." stop working
+// once a timer's ended (see subathon.Timer.SetEnded).
 func handleTwitchChatCommand(deps Deps, body []byte) {
 	cmd, ok, err := twitch.ParseChatCommand(body)
 	if err != nil {
@@ -305,7 +307,7 @@ func applyChatCommand(t *subathon.Timer, name string) error {
 	switch name {
 	case "pause":
 		return t.Stop()
-	case "unpause":
+	case "play":
 		return t.Resume()
 	case "lock":
 		return t.SetLocked(true)
@@ -313,7 +315,7 @@ func applyChatCommand(t *subathon.Timer, name string) error {
 		return t.SetLocked(false)
 	case "hide":
 		return t.SetHidden(true)
-	case "unhide":
+	case "show":
 		return t.SetHidden(false)
 	default:
 		return nil

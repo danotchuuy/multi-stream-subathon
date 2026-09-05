@@ -4,14 +4,25 @@
 /** Platforms an account identity can be linked to (login or link). */
 export type AuthPlatform = 'twitch' | 'kick' | 'youtube'
 
-export type Platform = 'kick' | 'youtube' | 'twitch' | 'streamelements' | 'manual'
+export type Platform =
+  | 'kick'
+  | 'youtube'
+  | 'twitch'
+  | 'streamelements'
+  | 'throne'
+  | 'manual'
 
 /** Platforms reward/money rates are configured for — every Platform
  * except 'manual', which specifies its own seconds/dollars directly
  * rather than looking one up (see RewardRules/MoneyRules). */
-export type RewardPlatform = 'twitch' | 'kick' | 'youtube' | 'streamelements'
+export type RewardPlatform =
+  | 'twitch'
+  | 'kick'
+  | 'youtube'
+  | 'streamelements'
+  | 'throne'
 
-export type EventType = 'sub' | 'gifted_sub' | 'donation' | 'bits' | 'manual'
+export type EventType = 'sub' | 'resub' | 'gifted_sub' | 'donation' | 'bits' | 'manual'
 
 export interface SubathonEvent {
   id: string
@@ -40,6 +51,11 @@ export interface Snapshot {
   twitchChannel?: string
   /** Kick channel this timer is configured to watch, if any. */
   kickChannel?: string
+  /** YouTube channel this timer is configured to watch, if any —
+   * youtubeChannelId is the picker-matching ID (see
+   * GET /api/youtube/channels), youtubeChannel its display title. */
+  youtubeChannel?: string
+  youtubeChannelId?: string
   /** Running total of every event's moneyAdded. */
   totalMoneyRaised: number
   /** Configured dollar goal to raise toward; absent/0 means none set. */
@@ -50,6 +66,11 @@ export interface Snapshot {
   /** While true, the public overlay renders nothing instead of the
    * clock. The dashboard always shows it regardless. */
   hidden: boolean
+  /** While true, this timer no longer receives live platform events
+   * (Twitch/Kick/StreamElements) or responds to any "!timer ..." chat
+   * command — only reachable from the dashboard, never chat. Manual
+   * events and every other dashboard control still work regardless. */
+  ended: boolean
   /** Colors for the public overlays' pills. Always fully populated
    * (server fills in defaults), never partial. */
   overlayColors: OverlayColors
@@ -98,6 +119,9 @@ export type RewardItem =
   | 'tier2_sub'
   | 'tier3_sub'
   | 'gifted_sub'
+  | 'gifted_tier1_sub'
+  | 'gifted_tier2_sub'
+  | 'gifted_tier3_sub'
   | 'bits_100'
   | 'donation_unit'
 
@@ -126,11 +150,15 @@ export interface Identity {
 }
 
 /** Whether a timer has a StreamElements account connected, and its
- * display name if so — never the JWT token itself (see
- * GET/PUT /api/timers/{id}/stream-elements-token). */
+ * display name if so — never the OAuth2 tokens themselves (see
+ * GET/DELETE /api/timers/{id}/stream-elements-token). */
 export interface StreamElementsStatus {
   connected: boolean
   displayName?: string
+  /** Whether this server has a StreamElements OAuth app configured at
+   * all — false means the "Connect" link won't work regardless of this
+   * timer's own state (see server.Deps.StreamElementsOAuth). */
+  oauthConfigured: boolean
 }
 
 /** One Twitch channel the signed-in user could pick as a timer's watched
@@ -142,6 +170,16 @@ export interface TwitchChannelOption {
   /** True for the signed-in user's own channel, false for one they only
    * moderate. */
   mine: boolean
+}
+
+/** One YouTube channel the signed-in user could pick as a timer's
+ * watched channel — always their own linked channel, never a "moderated
+ * channels" list the way TwitchChannelOption has: YouTube only lets a
+ * channel's own linked owner read its live chat. See
+ * GET /api/youtube/channels. */
+export interface YouTubeChannelOption {
+  id: string
+  title: string
 }
 
 /** GET /api/me: the logged-in user and their linked platform accounts. */

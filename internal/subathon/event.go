@@ -13,6 +13,7 @@ const (
 	PlatformYouTube        Platform = "youtube"
 	PlatformTwitch         Platform = "twitch"
 	PlatformStreamElements Platform = "streamelements"
+	PlatformThrone         Platform = "throne"
 	PlatformManual         Platform = "manual"
 )
 
@@ -21,6 +22,7 @@ type EventType string
 
 const (
 	EventSub       EventType = "sub"
+	EventResub     EventType = "resub"
 	EventGiftedSub EventType = "gifted_sub"
 	EventDonation  EventType = "donation"
 	EventBits      EventType = "bits"

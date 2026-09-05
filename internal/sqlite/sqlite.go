@@ -63,11 +63,16 @@ CREATE TABLE IF NOT EXISTS timers (
 	twitch_broadcaster_username   TEXT,
 	kick_broadcaster_id           TEXT,
 	kick_broadcaster_username     TEXT,
+	youtube_channel_id            TEXT,
+	youtube_channel_title         TEXT,
 	stream_elements_token         TEXT NOT NULL DEFAULT '',
+	stream_elements_refresh_token TEXT NOT NULL DEFAULT '',
+	stream_elements_token_expires_at TEXT,
 	stream_elements_channel_id    TEXT NOT NULL DEFAULT '',
 	stream_elements_display_name  TEXT NOT NULL DEFAULT '',
 	locked                        INTEGER NOT NULL DEFAULT 0,
 	hidden                        INTEGER NOT NULL DEFAULT 0,
+	ended                         INTEGER NOT NULL DEFAULT 0,
 	overlay_timer_bg              TEXT NOT NULL DEFAULT '',
 	overlay_timer_text            TEXT NOT NULL DEFAULT '',
 	overlay_money_bg              TEXT NOT NULL DEFAULT '',
@@ -195,6 +200,14 @@ func Open(path string) (*Repo, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate timers.kick_broadcaster_username: %w", err)
 	}
+	if err := addColumnIfMissing(db, "timers", "youtube_channel_id", "TEXT"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.youtube_channel_id: %w", err)
+	}
+	if err := addColumnIfMissing(db, "timers", "youtube_channel_title", "TEXT"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.youtube_channel_title: %w", err)
+	}
 	if err := addColumnIfMissing(db, "timers", "total_money_raised", "REAL NOT NULL DEFAULT 0"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate timers.total_money_raised: %w", err)
@@ -211,6 +224,10 @@ func Open(path string) (*Repo, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate timers.hidden: %w", err)
 	}
+	if err := addColumnIfMissing(db, "timers", "ended", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.ended: %w", err)
+	}
 	if err := addColumnIfMissing(db, "events", "money_added", "REAL NOT NULL DEFAULT 0"); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate events.money_added: %w", err)
@@ -218,12 +235,33 @@ func Open(path string) (*Repo, error) {
 	for _, col := range []string{
 		"overlay_timer_bg", "overlay_timer_text", "overlay_money_bg", "overlay_money_text",
 		"overlay_goal_bg", "overlay_goal_text", "overlay_goal_amount_bg", "overlay_goal_amount_text",
-		"stream_elements_token", "stream_elements_channel_id", "stream_elements_display_name",
+		"stream_elements_token", "stream_elements_refresh_token",
+		"stream_elements_channel_id", "stream_elements_display_name",
 	} {
 		if err := addColumnIfMissing(db, "timers", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("migrate timers.%s: %w", col, err)
 		}
+	}
+	// Nullable (no DEFAULT ''): a timestamp, not a string, same treatment
+	// as started_at/ends_at elsewhere in this schema.
+	if err := addColumnIfMissing(db, "timers", "stream_elements_token_expires_at", "TEXT"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.stream_elements_token_expires_at: %w", err)
+	}
+	// A row with a token but no refresh token predates this integration's
+	// switch from a pasted-in JWT to OAuth2 (every token this version
+	// saves comes paired with a refresh token — see
+	// Timer.SetStreamElementsAccount) — that JWT can't be used with the
+	// OAuth2 "oAuth <token>" auth scheme this version sends instead of
+	// "Bearer", so clear it rather than let the poller retry a doomed
+	// request forever. The owner reconnects from the dashboard.
+	if _, err := db.Exec(`
+		UPDATE timers
+		SET stream_elements_token = '', stream_elements_channel_id = '', stream_elements_display_name = ''
+		WHERE stream_elements_token != '' AND stream_elements_refresh_token = ''`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("clear pre-oauth2 stream elements tokens: %w", err)
 	}
 	if err := addColumnIfMissing(db, "money_milestones", "hidden", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		db.Close()
@@ -350,10 +388,12 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		SELECT id, user_id, name, running, started_at, ends_at, remaining_seconds, total_added_seconds,
 		       total_money_raised, money_goal,
 		       twitch_broadcaster_id, twitch_broadcaster_username,
-		       kick_broadcaster_id, kick_broadcaster_username, locked, hidden,
+		       kick_broadcaster_id, kick_broadcaster_username,
+		       youtube_channel_id, youtube_channel_title, locked, hidden, ended,
 		       overlay_timer_bg, overlay_timer_text, overlay_money_bg, overlay_money_text,
 		       overlay_goal_bg, overlay_goal_text, overlay_goal_amount_bg, overlay_goal_amount_text,
-		       stream_elements_token, stream_elements_channel_id, stream_elements_display_name,
+		       stream_elements_token, stream_elements_refresh_token, stream_elements_token_expires_at,
+		       stream_elements_channel_id, stream_elements_display_name,
 		       created_at, updated_at
 		FROM timers
 		ORDER BY created_at`)
@@ -365,19 +405,23 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 	var out []subathon.TimerRecord
 	for rows.Next() {
 		var rec subathon.TimerRecord
-		var running, locked, hidden int
+		var running, locked, hidden, ended int
 		var userID, startedAt, endsAt sql.NullString
 		var twitchBroadcasterID, twitchBroadcasterUsername sql.NullString
 		var kickBroadcasterID, kickBroadcasterUsername sql.NullString
+		var youtubeChannelID, youtubeChannelTitle sql.NullString
+		var streamElementsTokenExpiresAt sql.NullString
 		var createdAt, updatedAt string
 
 		if err := rows.Scan(&rec.ID, &userID, &rec.Name, &running, &startedAt, &endsAt,
 			&rec.RemainingSecs, &rec.TotalAddedSecs, &rec.TotalMoneyRaised, &rec.MoneyGoal,
 			&twitchBroadcasterID, &twitchBroadcasterUsername,
-			&kickBroadcasterID, &kickBroadcasterUsername, &locked, &hidden,
+			&kickBroadcasterID, &kickBroadcasterUsername,
+			&youtubeChannelID, &youtubeChannelTitle, &locked, &hidden, &ended,
 			&rec.OverlayTimerBg, &rec.OverlayTimerText, &rec.OverlayMoneyBg, &rec.OverlayMoneyText,
 			&rec.OverlayGoalBg, &rec.OverlayGoalText, &rec.OverlayGoalAmountBg, &rec.OverlayGoalAmountText,
-			&rec.StreamElementsToken, &rec.StreamElementsChannelID, &rec.StreamElementsDisplayName,
+			&rec.StreamElementsToken, &rec.StreamElementsRefreshToken, &streamElementsTokenExpiresAt,
+			&rec.StreamElementsChannelID, &rec.StreamElementsDisplayName,
 			&createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan timer row: %w", err)
 		}
@@ -390,8 +434,12 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		rec.TwitchBroadcasterUsername = twitchBroadcasterUsername.String
 		rec.KickBroadcasterID = kickBroadcasterID.String
 		rec.KickBroadcasterUsername = kickBroadcasterUsername.String
+		rec.YouTubeChannelID = youtubeChannelID.String
+		rec.YouTubeChannelTitle = youtubeChannelTitle.String
+		rec.StreamElementsTokenExpiresAt = parseTime(streamElementsTokenExpiresAt.String)
 		rec.Locked = locked != 0
 		rec.Hidden = hidden != 0
+		rec.Ended = ended != 0
 		rec.CreatedAt = parseTime(createdAt)
 		rec.UpdatedAt = parseTime(updatedAt)
 		out = append(out, rec)
@@ -405,20 +453,24 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		 SET running = ?, started_at = ?, ends_at = ?, remaining_seconds = ?, total_added_seconds = ?,
 		     total_money_raised = ?, money_goal = ?,
 		     twitch_broadcaster_id = ?, twitch_broadcaster_username = ?,
-		     kick_broadcaster_id = ?, kick_broadcaster_username = ?, locked = ?, hidden = ?,
+		     kick_broadcaster_id = ?, kick_broadcaster_username = ?,
+		     youtube_channel_id = ?, youtube_channel_title = ?, locked = ?, hidden = ?, ended = ?,
 		     overlay_timer_bg = ?, overlay_timer_text = ?, overlay_money_bg = ?, overlay_money_text = ?,
 		     overlay_goal_bg = ?, overlay_goal_text = ?, overlay_goal_amount_bg = ?, overlay_goal_amount_text = ?,
-		     stream_elements_token = ?, stream_elements_channel_id = ?, stream_elements_display_name = ?,
+		     stream_elements_token = ?, stream_elements_refresh_token = ?, stream_elements_token_expires_at = ?,
+		     stream_elements_channel_id = ?, stream_elements_display_name = ?,
 		     updated_at = ?
 		 WHERE id = ?`,
 		boolToInt(rec.Running), nullableTime(rec.StartedAt), nullableTime(rec.EndsAt),
 		rec.RemainingSecs, rec.TotalAddedSecs, rec.TotalMoneyRaised, rec.MoneyGoal,
 		nullableString(rec.TwitchBroadcasterID), nullableString(rec.TwitchBroadcasterUsername),
 		nullableString(rec.KickBroadcasterID), nullableString(rec.KickBroadcasterUsername),
-		boolToInt(rec.Locked), boolToInt(rec.Hidden),
+		nullableString(rec.YouTubeChannelID), nullableString(rec.YouTubeChannelTitle),
+		boolToInt(rec.Locked), boolToInt(rec.Hidden), boolToInt(rec.Ended),
 		rec.OverlayTimerBg, rec.OverlayTimerText, rec.OverlayMoneyBg, rec.OverlayMoneyText,
 		rec.OverlayGoalBg, rec.OverlayGoalText, rec.OverlayGoalAmountBg, rec.OverlayGoalAmountText,
-		rec.StreamElementsToken, rec.StreamElementsChannelID, rec.StreamElementsDisplayName,
+		rec.StreamElementsToken, rec.StreamElementsRefreshToken, nullableTime(rec.StreamElementsTokenExpiresAt),
+		rec.StreamElementsChannelID, rec.StreamElementsDisplayName,
 		formatTime(rec.UpdatedAt), rec.ID,
 	)
 	if err != nil {
@@ -435,6 +487,13 @@ func (r *Repo) InsertEvent(e subathon.Event) error {
 	)
 	if err != nil {
 		return fmt.Errorf("insert event: %w", err)
+	}
+	return nil
+}
+
+func (r *Repo) DeleteEvent(timerID, eventID string) error {
+	if _, err := r.db.Exec(`DELETE FROM events WHERE timer_id = ? AND id = ?`, timerID, eventID); err != nil {
+		return fmt.Errorf("delete event: %w", err)
 	}
 	return nil
 }

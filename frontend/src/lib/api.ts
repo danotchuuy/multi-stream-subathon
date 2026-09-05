@@ -13,6 +13,7 @@ import type {
   SubathonEvent,
   TimerSummary,
   TwitchChannelOption,
+  YouTubeChannelOption,
 } from '../types'
 
 export class HttpError extends Error {
@@ -67,6 +68,14 @@ export function getTwitchChannels(): Promise<TwitchChannelOption[]> {
   return request('/api/twitch/channels')
 }
 
+/** YouTube channel(s) the signed-in user can pick as a timer's watched
+ * channel — just their own linked channel(s), never a "moderated
+ * channels" list (see YouTubeChannelOption). Empty if they haven't
+ * linked YouTube (or YouTube isn't configured on the server). */
+export function getYouTubeChannels(): Promise<YouTubeChannelOption[]> {
+  return request('/api/youtube/channels')
+}
+
 export function logout(): Promise<void> {
   return request('/auth/logout', { method: 'POST' })
 }
@@ -93,8 +102,9 @@ export function getEventHistory(timerId: string): Promise<SubathonEvent[]> {
   return request(`/api/timers/${timerId}/events`)
 }
 
-/** (Re)initializes the clock to initialSeconds and starts it running,
- * discarding any time left over from a previous run. */
+/** (Re)initializes the clock to initialSeconds, discarding any time left
+ * over from a previous run. Leaves the timer stopped — call
+ * resumeSubathon separately to start it. */
 export function resetSubathon(
   timerId: string,
   initialSeconds: number,
@@ -135,6 +145,20 @@ export function hideSubathon(timerId: string): Promise<Snapshot> {
 /** Reverses hideSubathon. Same as "!unhide". */
 export function unhideSubathon(timerId: string): Promise<Snapshot> {
   return request(`/api/timers/${timerId}/control/unhide`, { method: 'POST' })
+}
+
+/** Ends the timer: unlike lock/hide above, dashboard-only — there's no
+ * chat command for it. Stops the timer from receiving any further live
+ * Twitch/Kick/StreamElements events and makes it stop responding to
+ * every "!timer ..." chat command; doesn't itself pause the clock or
+ * block manual events/other dashboard controls. */
+export function endSubathon(timerId: string): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/control/end`, { method: 'POST' })
+}
+
+/** Reverses endSubathon — resumes live events and chat commands. */
+export function unendSubathon(timerId: string): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/control/unend`, { method: 'POST' })
 }
 
 /** GET a timer's reward rules (seconds per contribution, by item and
@@ -251,6 +275,21 @@ export function setKickChannel(
   })
 }
 
+/** Sets (or, with an empty channelId, clears) the YouTube channel this
+ * timer watches for live Super Chats/Super Stickers/new members/gifted
+ * memberships. Unlike setTwitchChannel/setKickChannel, channelId must be
+ * one the signed-in user has themselves linked via "Sign in with
+ * Google"/"Link YouTube" (see getYouTubeChannels) — not free text. */
+export function setYouTubeChannel(
+  timerId: string,
+  channelId: string,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/youtube-channel`, {
+    method: 'PUT',
+    body: JSON.stringify({ channelId }),
+  })
+}
+
 /** Whether this timer has a StreamElements account connected. */
 export function getStreamElementsStatus(
   timerId: string,
@@ -258,18 +297,26 @@ export function getStreamElementsStatus(
   return request(`/api/timers/${timerId}/stream-elements-token`)
 }
 
-/** Connects (or, with an empty token, disconnects) this timer's
- * StreamElements account — the JWT token from
- * streamelements.com/dashboard/account/channels. A non-empty token is
- * validated server-side before being saved. */
-export function setStreamElementsToken(
+/** Disconnects this timer's StreamElements account. Connecting one
+ * happens via OAuth2 instead (see streamElementsOAuthStartUrl) — there's
+ * no token for the frontend to submit directly. */
+export function disconnectStreamElements(
   timerId: string,
-  token: string,
 ): Promise<StreamElementsStatus> {
   return request(`/api/timers/${timerId}/stream-elements-token`, {
-    method: 'PUT',
-    body: JSON.stringify({ token }),
+    method: 'DELETE',
   })
+}
+
+/** The URL to send the browser to (a plain navigation, not a fetch — it
+ * ends in a redirect to StreamElements' own authorize page) to connect
+ * this timer's StreamElements account. Requires being logged in as this
+ * timer's owner/moderator, same as every other control endpoint — unlike
+ * those, this one is reached via a top-level navigation (see
+ * StreamElementsForm's "Connect" link) so the session cookie rides along
+ * automatically rather than needing a separate Authorization header. */
+export function streamElementsOAuthStartUrl(timerId: string): string {
+  return `/api/timers/${timerId}/stream-elements/oauth/start`
 }
 
 /** This timer's current moderators (not including its owner). Viewable by
@@ -296,6 +343,16 @@ export function removeModerator(
   userId: string,
 ): Promise<void> {
   return request(`/api/timers/${timerId}/moderators/${userId}`, {
+    method: 'DELETE',
+  })
+}
+
+/** Deletes a previously recorded event and reverses its effect on the
+ * clock/money goal — the dashboard's recent-contributors "remove" control.
+ * Owner/moderator only; 404s if eventID isn't among the timer's recent
+ * events. */
+export function removeEvent(timerId: string, eventId: string): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/events/${eventId}`, {
     method: 'DELETE',
   })
 }

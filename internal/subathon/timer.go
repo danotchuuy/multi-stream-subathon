@@ -103,6 +103,15 @@ type Snapshot struct {
 	// configured to watch, if any (see Timer.SetKickChannel).
 	KickChannel string `json:"kickChannel,omitempty"`
 
+	// YouTubeChannel/YouTubeChannelID are the title and ID of the
+	// YouTube channel this timer is configured to watch, if any (see
+	// Timer.SetYouTubeChannel) — unlike TwitchChannel/KickChannel, the ID
+	// is exposed too since the frontend's picker (GET /api/youtube/
+	// channels) is keyed by ID, not title, so it needs the ID (not just
+	// the display title) to reselect the saved channel.
+	YouTubeChannel   string `json:"youtubeChannel,omitempty"`
+	YouTubeChannelID string `json:"youtubeChannelId,omitempty"`
+
 	// Locked, when true, means new contributions are still recorded (and
 	// still count toward TotalMoneyRaised) but no longer extend the
 	// clock — see Timer.SetLocked.
@@ -112,6 +121,12 @@ type Snapshot struct {
 	// rather than the clock — see Timer.SetHidden. The dashboard always
 	// shows the clock to the owner/moderators regardless.
 	Hidden bool `json:"hidden"`
+
+	// Ended, when true, means this timer no longer receives live
+	// platform events or responds to "!timer ..." chat commands — see
+	// Timer.SetEnded. Unlike Locked/Hidden, only reachable from the
+	// dashboard, never chat.
+	Ended bool `json:"ended"`
 
 	// OverlayColors customizes the public overlay's timer/money-goal pill
 	// colors — always populated (DefaultOverlayColors until customized),
@@ -146,9 +161,14 @@ type Timer struct {
 	// clock. hidden, when true, means the public overlay should render
 	// nothing. Both are toggled via the dashboard or a channel
 	// moderator's "!timer lock"/"!timer unlock"/"!timer hide"/
-	// "!timer unhide" chat command.
+	// "!timer show" chat command.
 	locked bool
 	hidden bool
+
+	// ended, when true, means this timer stops receiving live platform
+	// events and no longer responds to any "!timer ..." chat command —
+	// see SetEnded. Dashboard-only: there is no chat command for it.
+	ended bool
 
 	// totalMoneyRaised/moneyGoal mirror totalAdded/the clock, but for
 	// money: totalMoneyRaised accumulates every event's MoneyAdded;
@@ -166,14 +186,27 @@ type Timer struct {
 	kickBroadcasterID       string
 	kickBroadcasterUsername string
 
-	// streamElementsToken/streamElementsChannelID/
+	// youtubeChannelID/youtubeChannelTitle identify the YouTube channel
+	// (if any) whose Super Chats/Super Stickers/new members/gifted
+	// memberships should add time to this timer. Empty means none
+	// configured. Unlike twitchBroadcasterID/kickBroadcasterID, only a
+	// channel whose owner has linked their YouTube identity to this app
+	// can actually be watched — see Timer.SetYouTubeChannel.
+	youtubeChannelID    string
+	youtubeChannelTitle string
+
+	// streamElementsToken/streamElementsRefreshToken/
+	// streamElementsTokenExpiresAt/streamElementsChannelID/
 	// streamElementsDisplayName identify the StreamElements account (if
-	// any) this timer polls for tips — see SetStreamElementsAccount.
-	// Unlike the Twitch/Kick fields above, the token is a secret and must
-	// never appear in Snapshot or any other public response.
-	streamElementsToken       string
-	streamElementsChannelID   string
-	streamElementsDisplayName string
+	// any) this timer polls for tips — an OAuth2 access/refresh token
+	// pair, see SetStreamElementsAccount. Unlike the Twitch/Kick fields
+	// above, the tokens are secrets and must never appear in Snapshot or
+	// any other public response.
+	streamElementsToken          string
+	streamElementsRefreshToken   string
+	streamElementsTokenExpiresAt time.Time
+	streamElementsChannelID      string
+	streamElementsDisplayName    string
 
 	// overlayColors customizes the public overlay's pill colors; always
 	// fully populated (see fillOverlayColorDefaults), never a zero value.
@@ -192,27 +225,32 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		mods[id] = true
 	}
 	return &Timer{
-		repo:                      repo,
-		id:                        rec.ID,
-		userID:                    rec.UserID,
-		name:                      rec.Name,
-		running:                   rec.Running,
-		startedAt:                 rec.StartedAt,
-		endsAt:                    rec.EndsAt,
-		remaining:                 time.Duration(rec.RemainingSecs) * time.Second,
-		totalAdded:                rec.TotalAddedSecs,
-		events:                    events,
-		locked:                    rec.Locked,
-		hidden:                    rec.Hidden,
-		totalMoneyRaised:          rec.TotalMoneyRaised,
-		moneyGoal:                 rec.MoneyGoal,
-		twitchBroadcasterID:       rec.TwitchBroadcasterID,
-		twitchBroadcasterUsername: rec.TwitchBroadcasterUsername,
-		kickBroadcasterID:         rec.KickBroadcasterID,
-		kickBroadcasterUsername:   rec.KickBroadcasterUsername,
-		streamElementsToken:       rec.StreamElementsToken,
-		streamElementsChannelID:   rec.StreamElementsChannelID,
-		streamElementsDisplayName: rec.StreamElementsDisplayName,
+		repo:                         repo,
+		id:                           rec.ID,
+		userID:                       rec.UserID,
+		name:                         rec.Name,
+		running:                      rec.Running,
+		startedAt:                    rec.StartedAt,
+		endsAt:                       rec.EndsAt,
+		remaining:                    time.Duration(rec.RemainingSecs) * time.Second,
+		totalAdded:                   rec.TotalAddedSecs,
+		events:                       events,
+		locked:                       rec.Locked,
+		hidden:                       rec.Hidden,
+		ended:                        rec.Ended,
+		totalMoneyRaised:             rec.TotalMoneyRaised,
+		moneyGoal:                    rec.MoneyGoal,
+		twitchBroadcasterID:          rec.TwitchBroadcasterID,
+		twitchBroadcasterUsername:    rec.TwitchBroadcasterUsername,
+		kickBroadcasterID:            rec.KickBroadcasterID,
+		kickBroadcasterUsername:      rec.KickBroadcasterUsername,
+		youtubeChannelID:             rec.YouTubeChannelID,
+		youtubeChannelTitle:          rec.YouTubeChannelTitle,
+		streamElementsToken:          rec.StreamElementsToken,
+		streamElementsRefreshToken:   rec.StreamElementsRefreshToken,
+		streamElementsTokenExpiresAt: rec.StreamElementsTokenExpiresAt,
+		streamElementsChannelID:      rec.StreamElementsChannelID,
+		streamElementsDisplayName:    rec.StreamElementsDisplayName,
 		overlayColors: fillOverlayColorDefaults(OverlayColors{
 			TimerBg:   rec.OverlayTimerBg,
 			TimerText: rec.OverlayTimerText,
@@ -335,15 +373,43 @@ func (t *Timer) SetKickChannel(broadcasterID, username string) error {
 	return t.persistLocked()
 }
 
-// StreamElementsAccount returns this timer's configured StreamElements
-// JWT token, channel ID, and display name, or ("", "", "") if none is
-// configured. The token is a secret — callers building any response sent
-// to a client must not include it (see StreamElementsStatus, which
-// deliberately omits it).
-func (t *Timer) StreamElementsAccount() (token, channelID, displayName string) {
+// YouTubeChannel returns the YouTube channel ID and title this timer is
+// configured to watch, or ("", "") if none.
+func (t *Timer) YouTubeChannel() (channelID, title string) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.streamElementsToken, t.streamElementsChannelID, t.streamElementsDisplayName
+	return t.youtubeChannelID, t.youtubeChannelTitle
+}
+
+// SetYouTubeChannel changes which YouTube channel's Super Chats/Super
+// Stickers/new members/gifted memberships add time to this timer. Pass
+// ("", "") to stop watching any channel. Unlike SetTwitchChannel/
+// SetKickChannel, channelID must be a channel whose own owner has signed
+// into this app (see youtube.Poller) — there's no app-level credential
+// that works for an arbitrary channel, so callers (see
+// handleSetYouTubeChannel) only ever offer already-linked channels
+// rather than free text.
+func (t *Timer) SetYouTubeChannel(channelID, title string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.youtubeChannelID = channelID
+	t.youtubeChannelTitle = title
+
+	return t.persistLocked()
+}
+
+// StreamElementsAccount returns this timer's configured StreamElements
+// OAuth2 access token, refresh token, access-token expiry, channel ID,
+// and display name, or the zero values if none is configured. The
+// tokens are secrets — callers building any response sent to a client
+// must not include them (see StreamElementsStatus, which deliberately
+// omits them).
+func (t *Timer) StreamElementsAccount() (token, refreshToken string, expiresAt time.Time, channelID, displayName string) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.streamElementsToken, t.streamElementsRefreshToken, t.streamElementsTokenExpiresAt,
+		t.streamElementsChannelID, t.streamElementsDisplayName
 }
 
 // StreamElementsStatus reports whether a StreamElements account is
@@ -356,32 +422,55 @@ func (t *Timer) StreamElementsStatus() (connected bool, displayName string) {
 }
 
 // SetStreamElementsAccount changes which StreamElements account this
-// timer polls for tips. Pass ("", "", "") to disconnect. Callers are
-// responsible for having already validated token via
-// streamelements.Client.ResolveChannel (which is also how channelID/
-// displayName get filled in) and for calling streamelements.Poller.Watch
-// afterward to start/stop/restart polling — this method only persists the
-// state.
-func (t *Timer) SetStreamElementsAccount(token, channelID, displayName string) error {
+// timer polls for tips, after completing an OAuth2 connect flow (see
+// internal/server/streamelements_oauth.go). Pass zero values for every
+// argument to disconnect. Callers are responsible for having already
+// resolved channelID/displayName via streamelements.Client.
+// ResolveChannel and for calling streamelements.Poller.Watch afterward
+// to start/stop/restart polling — this method only persists the state.
+func (t *Timer) SetStreamElementsAccount(token, refreshToken string, expiresAt time.Time, channelID, displayName string) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.streamElementsToken = token
+	t.streamElementsRefreshToken = refreshToken
+	t.streamElementsTokenExpiresAt = expiresAt
 	t.streamElementsChannelID = channelID
 	t.streamElementsDisplayName = displayName
 
 	return t.persistLocked()
 }
 
-// Reset (re)initializes the countdown to the given duration and starts it
-// running, discarding whatever time was left on the clock.
+// SetStreamElementsTokens updates just this timer's StreamElements
+// access/refresh token pair, leaving its channel ID/display name
+// unchanged — called by streamelements.Poller after refreshing an
+// about-to-expire access token, as opposed to SetStreamElementsAccount's
+// full (re)connect. A no-op (returns nil without persisting) if this
+// timer isn't currently connected, e.g. the owner disconnected it while
+// a refresh was in flight.
+func (t *Timer) SetStreamElementsTokens(token, refreshToken string, expiresAt time.Time) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.streamElementsToken == "" {
+		return nil
+	}
+
+	t.streamElementsToken = token
+	t.streamElementsRefreshToken = refreshToken
+	t.streamElementsTokenExpiresAt = expiresAt
+
+	return t.persistLocked()
+}
+
+// Reset (re)initializes the countdown to the given duration, discarding
+// whatever time was left on the clock. It leaves the timer stopped —
+// call Resume (or the dashboard's Play) to start it counting down.
 func (t *Timer) Reset(initial time.Duration) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.running = true
-	t.startedAt = time.Now()
-	t.endsAt = t.startedAt.Add(initial)
+	t.running = false
 	t.remaining = initial
 
 	return t.persistLocked()
@@ -458,6 +547,42 @@ func (t *Timer) SetHidden(hidden bool) error {
 	return t.persistLocked()
 }
 
+// Ended reports whether this timer has been ended (see SetEnded).
+func (t *Timer) Ended() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.ended
+}
+
+// SetEnded ends or reopens this timer. Ending is a stronger, deliberately
+// UI-only action than SetLocked — there is no "!timer end" chat command
+// (see twitch.chatCommandNames), unlike every other toggle here — meant
+// for shutting a subathon down for good rather than a temporary freeze:
+//
+//   - Manager.RunningByTwitchChannel/RunningByKickChannel/
+//     TimersByTwitchChannel all exclude an ended timer, so it stops
+//     receiving live contribution events and, since
+//     TimersByTwitchChannel also backs chat command routing, stops
+//     responding to any "!timer ..." command at all — both the
+//     "de-register the listeners" and "chat commands no longer work"
+//     halves of ending live entirely in those Manager queries rather
+//     than here.
+//   - The caller (handleSetEnded) additionally stops/resumes this
+//     timer's StreamElements poller goroutine to match, since that's a
+//     genuinely per-timer listener Manager's channel-keyed queries above
+//     don't cover.
+//
+// Doesn't itself pause the countdown, change Locked/Hidden, or block
+// manual events/dashboard controls — those stay independently
+// controllable (e.g. to make a final correction) even once ended.
+func (t *Timer) SetEnded(ended bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.ended = ended
+	return t.persistLocked()
+}
+
 // OverlayColors returns this timer's configured overlay pill colors, with
 // DefaultOverlayColors filled in for anything unset.
 func (t *Timer) OverlayColors() OverlayColors {
@@ -510,6 +635,48 @@ func (t *Timer) AddEvent(e Event) error {
 	}
 
 	if err := t.repo.InsertEvent(e); err != nil {
+		return err
+	}
+	return t.persistLocked()
+}
+
+// RemoveEvent deletes a previously recorded event (e.g. a mistaken or
+// fraudulent contribution caught after the fact) and reverses exactly what
+// AddEvent did for it: the same SecondsAdded is subtracted from the
+// running end time (or frozen remaining time) and totalAdded, and the same
+// MoneyAdded is subtracted from totalMoneyRaised — so the clock and money
+// goal end up exactly where they'd be had the event never been recorded.
+// Returns an error if eventID isn't among this timer's recent events
+// (Snapshot.RecentEvents/maxRecentEvents) — older history isn't
+// removable this way, only what the dashboard's recent-contributors list
+// can actually show a remove control for.
+func (t *Timer) RemoveEvent(eventID string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	idx := -1
+	for i, e := range t.events {
+		if e.ID == eventID {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return fmt.Errorf("event %s not found", eventID)
+	}
+	removed := t.events[idx]
+	t.events = append(t.events[:idx:idx], t.events[idx+1:]...)
+
+	removedSecs := time.Duration(removed.SecondsAdded) * time.Second
+	t.totalAdded -= removed.SecondsAdded
+	if t.running {
+		t.endsAt = t.endsAt.Add(-removedSecs)
+	} else {
+		t.remaining -= removedSecs
+	}
+	t.totalMoneyRaised -= removed.MoneyAdded
+
+	if err := t.repo.DeleteEvent(t.id, eventID); err != nil {
 		return err
 	}
 	return t.persistLocked()
@@ -656,10 +823,13 @@ func (t *Timer) Snapshot() Snapshot {
 		RecentEvents:     events,
 		TwitchChannel:    t.twitchBroadcasterUsername,
 		KickChannel:      t.kickBroadcasterUsername,
+		YouTubeChannel:   t.youtubeChannelTitle,
+		YouTubeChannelID: t.youtubeChannelID,
 		TotalMoneyRaised: t.totalMoneyRaised,
 		MoneyGoal:        t.moneyGoal,
 		Locked:           t.locked,
 		Hidden:           t.hidden,
+		Ended:            t.ended,
 		OverlayColors:    t.overlayColors,
 	}
 }
@@ -672,33 +842,38 @@ func (t *Timer) persistLocked() error {
 		remaining = max(0, time.Until(t.endsAt))
 	}
 	return t.repo.SaveTimerState(TimerRecord{
-		ID:                        t.id,
-		UserID:                    t.userID,
-		Name:                      t.name,
-		Running:                   t.running,
-		StartedAt:                 t.startedAt,
-		EndsAt:                    t.endsAt,
-		RemainingSecs:             int(remaining.Seconds()),
-		TotalAddedSecs:            t.totalAdded,
-		TotalMoneyRaised:          t.totalMoneyRaised,
-		MoneyGoal:                 t.moneyGoal,
-		Locked:                    t.locked,
-		Hidden:                    t.hidden,
-		TwitchBroadcasterID:       t.twitchBroadcasterID,
-		TwitchBroadcasterUsername: t.twitchBroadcasterUsername,
-		KickBroadcasterID:         t.kickBroadcasterID,
-		KickBroadcasterUsername:   t.kickBroadcasterUsername,
-		StreamElementsToken:       t.streamElementsToken,
-		StreamElementsChannelID:   t.streamElementsChannelID,
-		StreamElementsDisplayName: t.streamElementsDisplayName,
-		OverlayTimerBg:            t.overlayColors.TimerBg,
-		OverlayTimerText:          t.overlayColors.TimerText,
-		OverlayMoneyBg:            t.overlayColors.MoneyBg,
-		OverlayMoneyText:          t.overlayColors.MoneyText,
-		OverlayGoalBg:             t.overlayColors.GoalBg,
-		OverlayGoalText:           t.overlayColors.GoalText,
-		OverlayGoalAmountBg:       t.overlayColors.GoalAmountBg,
-		OverlayGoalAmountText:     t.overlayColors.GoalAmountText,
-		UpdatedAt:                 time.Now(),
+		ID:                           t.id,
+		UserID:                       t.userID,
+		Name:                         t.name,
+		Running:                      t.running,
+		StartedAt:                    t.startedAt,
+		EndsAt:                       t.endsAt,
+		RemainingSecs:                int(remaining.Seconds()),
+		TotalAddedSecs:               t.totalAdded,
+		TotalMoneyRaised:             t.totalMoneyRaised,
+		MoneyGoal:                    t.moneyGoal,
+		Locked:                       t.locked,
+		Hidden:                       t.hidden,
+		Ended:                        t.ended,
+		TwitchBroadcasterID:          t.twitchBroadcasterID,
+		TwitchBroadcasterUsername:    t.twitchBroadcasterUsername,
+		KickBroadcasterID:            t.kickBroadcasterID,
+		KickBroadcasterUsername:      t.kickBroadcasterUsername,
+		YouTubeChannelID:             t.youtubeChannelID,
+		YouTubeChannelTitle:          t.youtubeChannelTitle,
+		StreamElementsToken:          t.streamElementsToken,
+		StreamElementsRefreshToken:   t.streamElementsRefreshToken,
+		StreamElementsTokenExpiresAt: t.streamElementsTokenExpiresAt,
+		StreamElementsChannelID:      t.streamElementsChannelID,
+		StreamElementsDisplayName:    t.streamElementsDisplayName,
+		OverlayTimerBg:               t.overlayColors.TimerBg,
+		OverlayTimerText:             t.overlayColors.TimerText,
+		OverlayMoneyBg:               t.overlayColors.MoneyBg,
+		OverlayMoneyText:             t.overlayColors.MoneyText,
+		OverlayGoalBg:                t.overlayColors.GoalBg,
+		OverlayGoalText:              t.overlayColors.GoalText,
+		OverlayGoalAmountBg:          t.overlayColors.GoalAmountBg,
+		OverlayGoalAmountText:        t.overlayColors.GoalAmountText,
+		UpdatedAt:                    time.Now(),
 	})
 }

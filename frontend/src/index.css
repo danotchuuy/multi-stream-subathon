@@ -63,6 +63,15 @@ a {
   padding: 24px 16px 64px;
 }
 
+/* Wider than the default .dashboard — for the Reward settings page,
+   whose tables (an "Item" label column plus one column per platform:
+   Twitch, Kick, YouTube, StreamElements, Throne) need more room than
+   720px to lay out without triggering .reward-table-wrap's horizontal
+   scrollbar. */
+.dashboard-wide {
+  max-width: 960px;
+}
+
 .dashboard header {
   display: flex;
   align-items: center;
@@ -72,6 +81,14 @@ a {
 .dashboard h1 {
   font-size: 22px;
   margin: 0;
+}
+
+.tagline {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  max-width: 46ch;
 }
 
 .back-link {
@@ -90,6 +107,22 @@ a {
   display: flex;
   align-items: center;
   gap: 16px;
+}
+
+.login-link {
+  display: block;
+  font-size: 13px;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+}
+
+.login-link:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .overlay-link {
@@ -275,6 +308,10 @@ a {
   color: #0f1115;
 }
 
+.login-button-youtube {
+  background: #ff0000;
+}
+
 .login-button.disabled {
   background: var(--panel);
   color: var(--text-dim);
@@ -319,6 +356,32 @@ a {
   align-items: stretch;
 }
 
+/* Overlay pill color pickers: a fixed two-column grid instead of the
+   default control-group layout (flex-wrap, which reflows items at the
+   container's whim and bottom-aligns rows of uneven height once labels
+   wrap). Grid rows always align cleanly across both columns. */
+.overlay-colors-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px 24px;
+  width: 100%;
+}
+
+.overlay-colors-grid label {
+  align-items: flex-start;
+}
+
+/* The native color swatch inherits the shared `input` rule's padding
+   and border meant for text fields, which pads the swatch away from
+   its own edges and leaves it looking off-center under its label. A
+   fixed, near-borderless box reads as a clean color swatch instead. */
+.overlay-colors-grid input[type='color'] {
+  width: 100%;
+  max-width: 72px;
+  height: 32px;
+  padding: 2px;
+}
+
 .control-row {
   display: flex;
   align-items: center;
@@ -352,6 +415,21 @@ a {
   font-size: 16px;
 }
 
+.events-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.events-window {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+
 .events ul {
   list-style: none;
   margin: 0;
@@ -363,12 +441,29 @@ a {
 
 .events li {
   display: flex;
+  align-items: center;
   gap: 12px;
   padding: 10px 14px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 14px;
+}
+
+.event-remove {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.event-remove:hover:not(:disabled) {
+  color: var(--down);
+  border-color: var(--down);
 }
 
 .events .platform {
@@ -462,6 +557,11 @@ a {
   width: 90px;
 }
 
+.reward-table-na {
+  color: var(--text-dim);
+  text-align: center;
+}
+
 footer {
   margin-top: 32px;
   color: var(--text-dim);
@@ -484,12 +584,27 @@ footer {
   border-radius: 999px;
   overflow: hidden;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  /* Backs the inset margin above/below .overlay-pill-divider (see
+     below), set inline in Overlay.tsx to the timer pill's own
+     background — otherwise that strip shows through to the page's
+     transparent background instead of blending with the pills. */
 }
 
 .overlay-pill {
   display: inline-flex;
   align-items: center;
   padding: 14px 32px;
+}
+
+/* Sits between the money and timer pills once .overlay-pill-group's
+   overflow: hidden has merged them into one continuous shape, so they
+   read as a single combined pill split in two rather than two separate
+   ones — colored to match the timer pill's own text (see Overlay.tsx)
+   rather than a fixed color, since overlay colors are user-customizable. */
+.overlay-pill-divider {
+  width: 1px;
+  align-self: stretch;
+  margin: 14px 0;
 }
 
 .overlay-clock,

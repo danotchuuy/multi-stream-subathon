@@ -35,13 +35,21 @@ type Config struct {
 	// timer state and contributor history survive restarts/redeploys.
 	DBPath string
 
+	// UIDistDir is the path to the built frontend assets (frontend/dist
+	// after `npm run build`). Empty (the default outside Docker) skips
+	// static file serving, since local development instead runs the Vite
+	// dev server and its API proxy — see internal/server.New.
+	UIDistDir string
+
 	// CookieSecure marks the session cookie Secure (HTTPS-only). Leave
 	// false for local/LAN http development; set true once served over
 	// TLS, or the browser will silently refuse to store the cookie.
 	CookieSecure bool
 
-	Twitch OAuthAppConfig
-	Kick   OAuthAppConfig
+	Twitch         OAuthAppConfig
+	Kick           OAuthAppConfig
+	YouTube        OAuthAppConfig
+	StreamElements OAuthAppConfig
 
 	// TwitchWebhookSecret signs/verifies Twitch EventSub webhook
 	// notifications. Empty disables live Twitch event listening (reward
@@ -52,6 +60,13 @@ type Config struct {
 	// TwitchWebhookCallbackURL is the public https:// URL Twitch posts
 	// EventSub notifications to. Derived from PublicBaseURL.
 	TwitchWebhookCallbackURL string
+
+	// ThroneWebhookPublicKey overrides Throne's built-in published Ed25519
+	// webhook-signing public key (see internal/platform/throne). Leave
+	// unset — Throne needs no server-level app credential at all, unlike
+	// every other integration above, so this only matters if Throne
+	// rotates its key before this app is updated to match.
+	ThroneWebhookPublicKey string
 }
 
 // OAuthAppConfig holds one platform's registered OAuth app credentials.
@@ -84,6 +99,7 @@ func Load() Config {
 		AllowedOrigin:   getEnv("ALLOWED_ORIGIN", publicBaseURL),
 		InitialDuration: getEnvDuration("INITIAL_DURATION", time.Hour),
 		DBPath:          getEnv("DB_PATH", "data/subathon.db"),
+		UIDistDir:       getEnv("UI_DIST_DIR", ""),
 		CookieSecure:    getEnvBool("COOKIE_SECURE", defaultCookieSecure),
 		Twitch: OAuthAppConfig{
 			ClientID:     getEnv("TWITCH_CLIENT_ID", ""),
@@ -95,8 +111,24 @@ func Load() Config {
 			ClientSecret: getEnv("KICK_CLIENT_SECRET", ""),
 			RedirectURL:  getEnv("KICK_REDIRECT_URL", publicBaseURL+"/auth/kick/callback"),
 		},
+		YouTube: OAuthAppConfig{
+			ClientID:     getEnv("YOUTUBE_CLIENT_ID", ""),
+			ClientSecret: getEnv("YOUTUBE_CLIENT_SECRET", ""),
+			RedirectURL:  getEnv("YOUTUBE_REDIRECT_URL", publicBaseURL+"/auth/youtube/callback"),
+		},
+		// Unlike Twitch/Kick (whose {provider}/start route also signs
+		// into this app), StreamElements' redirect is only ever reached
+		// via its own dedicated per-timer connect flow — see
+		// streamelements_oauth.go — but registers with StreamElements the
+		// same way, as a fixed callback URL.
+		StreamElements: OAuthAppConfig{
+			ClientID:     getEnv("STREAMELEMENTS_CLIENT_ID", ""),
+			ClientSecret: getEnv("STREAMELEMENTS_CLIENT_SECRET", ""),
+			RedirectURL:  getEnv("STREAMELEMENTS_REDIRECT_URL", publicBaseURL+"/auth/streamelements/callback"),
+		},
 		TwitchWebhookSecret:      getEnv("TWITCH_WEBHOOK_SECRET", ""),
 		TwitchWebhookCallbackURL: publicBaseURL + "/webhooks/twitch",
+		ThroneWebhookPublicKey:   getEnv("THRONE_WEBHOOK_PUBLIC_KEY", ""),
 	}
 }
 

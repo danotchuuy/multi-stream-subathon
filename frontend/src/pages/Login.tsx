@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Navigate, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useSearchParams } from 'react-router-dom'
 import { getAuthProviders } from '../lib/api'
 import { useAuth } from '../lib/AuthContext'
 import type { AuthPlatform } from '../types'
@@ -47,7 +47,7 @@ export default function Login() {
         )}
 
         <div className="login-buttons">
-          {(['twitch', 'kick'] as AuthPlatform[]).map((platform) => {
+          {(['twitch', 'kick', 'youtube'] as AuthPlatform[]).map((platform) => {
             const enabled = providers?.includes(platform) ?? false
             return (
               <a
@@ -69,11 +69,18 @@ export default function Login() {
 
         {providers && providers.length === 0 && (
           <p className="empty">
-            No login providers are configured yet. Set TWITCH_CLIENT_ID or
-            KICK_CLIENT_ID on the server to enable sign-in.
+            No login providers are configured yet. Set TWITCH_CLIENT_ID,
+            KICK_CLIENT_ID, or YOUTUBE_CLIENT_ID on the server to enable
+            sign-in.
           </p>
         )}
       </section>
+
+      <footer>
+        <p>
+          <Link to="/privacy">Privacy Policy</Link>
+        </p>
+      </footer>
     </div>
   )
 }

@@ -1,19 +1,23 @@
 import { useEffect, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
 import {
   addManualEvent,
   addModerator,
+  disconnectStreamElements,
+  endSubathon,
   getModerators,
   getMoneyMilestones,
   getMoneyRules,
   getRewardRules,
   getStreamElementsStatus,
   getTwitchChannels,
+  getYouTubeChannels,
   hideSubathon,
   HttpError,
   listTimers,
   lockSubathon,
+  removeEvent,
   removeModerator,
   resetSubathon,
   resumeSubathon,
@@ -21,21 +25,25 @@ import {
   setMoneyGoal,
   setMoneyRaised,
   setOverlayColors,
-  setStreamElementsToken,
   setTwitchChannel,
+  setYouTubeChannel,
   stopSubathon,
+  streamElementsOAuthStartUrl,
+  unendSubathon,
   unhideSubathon,
   unlockSubathon,
 } from '../lib/api'
 import { formatDuration, formatMoney } from '../lib/format'
 import type {
-  AuthPlatform,
   Moderator,
   MoneyMilestone,
   MoneyRules,
   OverlayColors,
+  RewardItem,
+  RewardPlatform,
   RewardRules,
   TwitchChannelOption,
+  YouTubeChannelOption,
 } from '../types'
 
 function controlErrorMessage(err: unknown): string {
@@ -103,50 +111,39 @@ function ChannelForm({
   )
 }
 
-/** Connects this timer to a StreamElements account so its tips
- * automatically add time/money via the "Donation (per $1)" reward/money
- * rules for the "streamelements" platform (see the Rewards page) — the
- * server polls for new tips every ~20s once connected. The token itself
- * is never re-displayed after saving (it's a secret): this only ever
- * shows connected/disconnected status and, once connected, the account's
- * display name. */
+/** Connects this timer to a StreamElements account (via OAuth2 — see
+ * streamElementsOAuthStartUrl) so its tips automatically add time/money
+ * via the "Donation (per $1)" reward/money rules for the
+ * "streamelements" platform (see the Rewards page) — the server polls
+ * for new tips every ~20s once connected. This only ever shows
+ * connected/disconnected status and, once connected, the account's
+ * display name — never a token, which the frontend never sees at all
+ * now (the server exchanges/refreshes it directly). */
 function StreamElementsForm({ timerId }: { timerId: string }) {
+  const [params] = useSearchParams()
   const [connected, setConnected] = useState(false)
   const [displayName, setDisplayName] = useState('')
-  const [token, setToken] = useState('')
+  const [oauthConfigured, setOauthConfigured] = useState(true)
   const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(
+    params.get('error') ? 'Failed to connect StreamElements. Please try again.' : null,
+  )
 
   useEffect(() => {
     getStreamElementsStatus(timerId)
       .then((status) => {
         setConnected(status.connected)
         setDisplayName(status.displayName ?? '')
+        setOauthConfigured(status.oauthConfigured)
       })
       .catch(() => setError('Failed to load StreamElements status.'))
   }, [timerId])
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      const status = await setStreamElementsToken(timerId, token.trim())
-      setConnected(status.connected)
-      setDisplayName(status.displayName ?? '')
-      setToken('')
-    } catch (err) {
-      setError(controlErrorMessage(err))
-    } finally {
-      setBusy(false)
-    }
-  }
 
   const handleDisconnect = async () => {
     setBusy(true)
     setError(null)
     try {
-      await setStreamElementsToken(timerId, '')
+      await disconnectStreamElements(timerId)
       setConnected(false)
       setDisplayName('')
     } catch (err) {
@@ -157,32 +154,26 @@ function StreamElementsForm({ timerId }: { timerId: string }) {
   }
 
   return (
-    <form className="control-group" onSubmit={handleSubmit}>
-      <label>
-        <span
-          className={`status ${connected ? 'status-ok' : 'status-down'}`}
-        >
-          {connected ? `Connected as ${displayName}` : 'Not connected'}
+    <div className="control-group">
+      <span className={`status ${connected ? 'status-ok' : 'status-down'}`}>
+        {connected ? `Connected as ${displayName}` : 'Not connected'}
+      </span>
+      {oauthConfigured ? (
+        <a href={streamElementsOAuthStartUrl(timerId)}>
+          {connected ? 'Reconnect' : 'Connect'} StreamElements
+        </a>
+      ) : (
+        <span className="control-hint">
+          StreamElements isn't configured on this server.
         </span>
-        StreamElements JWT token
-        <input
-          type="password"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="from streamelements.com/dashboard/account/channels"
-          autoComplete="off"
-        />
-      </label>
-      <button type="submit" disabled={busy || !token.trim()}>
-        {connected ? 'Reconnect' : 'Connect'}
-      </button>
+      )}
       {connected && (
         <button type="button" onClick={handleDisconnect} disabled={busy}>
           Disconnect
         </button>
       )}
       {error && <p className="error-message">{error}</p>}
-    </form>
+    </div>
   )
 }
 
@@ -330,21 +321,96 @@ function MilestonesList({
   )
 }
 
-/** Records a real donation for one contributor — e.g. a cash app/Venmo/
- * PayPal gift with no live webhook — as a proper history entry. Seconds
- * and money added are computed from the timer's "Donation (per $1)"
- * reward/money rules for the chosen platform (see the Rewards page),
- * same as a live sub/bits/gift-sub event would be — not typed in
- * directly, so it stays consistent with whatever rates are configured
- * instead of needing the owner to do that math themselves. Distinct from
- * the raw "Add test event" tool below, which lets you type arbitrary
- * seconds/dollars for testing rather than reflecting a real rate. */
+/** What kind of contribution AddDonationForm is recording — matches
+ * EventType, minus 'manual' (that's the raw "Add test event" tool
+ * below). */
+type DonationKind = 'sub' | 'gifted_sub' | 'bits' | 'donation'
+
+/** Which DonationKinds are offered per platform in AddDonationForm's
+ * "What was contributed" dropdown — StreamElements/Throne aren't listed
+ * here since they skip the dropdown entirely (see AddDonationForm), only
+ * ever recording a dollar donation. Twitch and Kick both have a genuine
+ * monetized cash-equivalent action (bits/Kicks) plus subs, so a raw
+ * dollar amount isn't a real contribution kind for either — that's what
+ * StreamElements/Throne's own "Dollars" is for. YouTube has neither bits
+ * nor a Kicks equivalent (see the Rewards page's ITEMS table), so Dollars
+ * (Super Chat) stays as its one cash-like option instead. */
+const DONATION_KINDS: Record<
+  Exclude<RewardPlatform, 'streamelements' | 'throne'>,
+  DonationKind[]
+> = {
+  twitch: ['sub', 'gifted_sub', 'bits'],
+  kick: ['sub', 'gifted_sub', 'bits'],
+  youtube: ['donation', 'sub', 'gifted_sub'],
+}
+
+const DONATION_KIND_LABELS: Record<DonationKind, string> = {
+  donation: 'Dollars',
+  sub: 'Sub',
+  gifted_sub: 'Gifted subs',
+  bits: 'Bits / Kicks',
+}
+
+/** The RewardItem/MoneyRules row a given kind/platform/tier combination
+ * looks its rate up from. Only Twitch actually distinguishes sub tiers —
+ * Kick prices every sub as tier 1 (it doesn't have tiers) and YouTube has
+ * none either, so 'sub' on those platforms always resolves to tier1_sub
+ * regardless of the picked tier. Twitch's gifted subs are tiered the same
+ * way regular subs are; Kick/YouTube's gifted subs are a single flat
+ * rate — see the Rewards page's ITEMS table for the same split.
+ * StreamElements/Throne only ever have a donation_unit rate configured
+ * (see ITEMS there too), so the UI only ever offers kind 'donation' for
+ * them — sub/gifted_sub/bits below are unreachable for those platforms in
+ * practice, not specially handled. */
+function donationRewardItem(
+  kind: DonationKind,
+  platform: RewardPlatform,
+  tier: 1 | 2 | 3,
+): RewardItem {
+  const tiered = platform === 'twitch'
+  switch (kind) {
+    case 'sub':
+      if (!tiered) return 'tier1_sub'
+      return tier === 1 ? 'tier1_sub' : tier === 2 ? 'tier2_sub' : 'tier3_sub'
+    case 'gifted_sub':
+      if (!tiered) return 'gifted_sub'
+      return tier === 1
+        ? 'gifted_tier1_sub'
+        : tier === 2
+          ? 'gifted_tier2_sub'
+          : 'gifted_tier3_sub'
+    case 'bits':
+      return 'bits_100'
+    case 'donation':
+      return 'donation_unit'
+  }
+}
+
+/** Records a real contribution for one contributor — a sub, a gifted sub,
+ * bits/Kicks, or a cash app/Venmo/PayPal-style dollar gift with no live
+ * webhook — as a proper history entry. Seconds and money added are
+ * computed from the timer's reward/money rules for the chosen kind and
+ * platform (see the Rewards page), same as a live event of that kind
+ * would be — not typed in directly, so it stays consistent with whatever
+ * rates are configured instead of needing the owner to do that math
+ * themselves. Distinct from the raw "Add test event" tool below, which
+ * lets you type arbitrary seconds/dollars for testing rather than
+ * reflecting a real rate.
+ *
+ * "Add time to timer" is checked by default, same as a real event. When
+ * unchecked, secondsAdded is sent as 0 — the contribution is still
+ * recorded (money, history, count) but doesn't extend the clock, e.g.
+ * for a contribution that already got credited manually or shouldn't
+ * count twice. */
 function AddDonationForm({ timerId }: { timerId: string }) {
   const [rewardRules, setRewardRules] = useState<RewardRules | null>(null)
   const [moneyRules, setMoneyRules] = useState<MoneyRules | null>(null)
   const [username, setUsername] = useState('')
-  const [platform, setPlatform] = useState<AuthPlatform>('twitch')
-  const [amount, setAmount] = useState(0)
+  const [platform, setPlatform] = useState<RewardPlatform>('twitch')
+  const [kind, setKind] = useState<DonationKind>('sub')
+  const [tier, setTier] = useState<1 | 2 | 3>(1)
+  const [count, setCount] = useState(0)
+  const [addTime, setAddTime] = useState(true)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -352,32 +418,54 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   useEffect(() => {
     getRewardRules(timerId)
       .then(setRewardRules)
-      .catch(() => setError('Failed to load donation reward rate.'))
+      .catch(() => setError('Failed to load reward rates.'))
     getMoneyRules(timerId)
       .then(setMoneyRules)
-      .catch(() => setError('Failed to load donation money rate.'))
+      .catch(() => setError('Failed to load money rates.'))
   }, [timerId])
 
-  const secondsPerDollar = rewardRules?.donation_unit[platform] ?? 0
-  const moneyPerDollar = moneyRules?.donation_unit[platform] ?? 0
+  const item = donationRewardItem(kind, platform, tier)
+  const showTier = platform === 'twitch' && (kind === 'sub' || kind === 'gifted_sub')
+  const secondsPerUnit = rewardRules?.[item][platform] ?? 0
+  const moneyPerUnit = moneyRules?.[item][platform] ?? 0
+  // Bits/Kicks are priced per 100 (see RewardBits100); everything else is
+  // priced per unit directly — same split as twitch.ParsedEvent.Seconds/
+  // Money.
+  const seconds =
+    item === 'bits_100'
+      ? Math.ceil((count * secondsPerUnit) / 100)
+      : count * secondsPerUnit
+  const money =
+    item === 'bits_100'
+      ? (count * moneyPerUnit) / 100
+      : count * moneyPerUnit
+
+  const countLabel =
+    kind === 'donation'
+      ? 'Amount donated ($)'
+      : kind === 'bits'
+        ? 'Bits/Kicks'
+        : kind === 'gifted_sub'
+          ? 'Subs gifted'
+          : 'Number of subs'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!username.trim() || amount <= 0) return
+    if (!username.trim() || count <= 0) return
     setBusy(true)
     setSaved(false)
     setError(null)
     try {
       await addManualEvent(timerId, {
         platform,
-        type: 'donation',
+        type: kind,
         username,
-        secondsAdded: Math.round(amount * secondsPerDollar),
-        moneyAdded: amount * moneyPerDollar || undefined,
-        amount,
+        secondsAdded: addTime ? seconds : 0,
+        moneyAdded: money || undefined,
+        amount: count,
       })
       setUsername('')
-      setAmount(0)
+      setCount(0)
       setSaved(true)
     } catch (err) {
       setError(controlErrorMessage(err))
@@ -404,27 +492,89 @@ function AddDonationForm({ timerId }: { timerId: string }) {
         Platform
         <select
           value={platform}
-          onChange={(e) => setPlatform(e.target.value as AuthPlatform)}
+          onChange={(e) => {
+            const next = e.target.value as RewardPlatform
+            setPlatform(next)
+            // Keep kind valid for the new platform's options (see
+            // DONATION_KINDS) rather than leaving a stale, no-longer
+            // offered one selected — e.g. switching from YouTube's
+            // Dollars to Twitch, which doesn't offer it.
+            if (next === 'streamelements' || next === 'throne') {
+              setKind('donation')
+            } else if (!DONATION_KINDS[next].includes(kind)) {
+              setKind(DONATION_KINDS[next][0])
+            }
+            setSaved(false)
+          }}
         >
           <option value="twitch">Twitch</option>
           <option value="kick">Kick</option>
           <option value="youtube">YouTube</option>
+          <option value="streamelements">StreamElements</option>
+          <option value="throne">Throne</option>
         </select>
       </label>
+      {platform === 'streamelements' || platform === 'throne' ? (
+        <p className="control-hint">Recorded as a dollar donation.</p>
+      ) : (
+        <label>
+          What was contributed
+          <select
+            value={kind}
+            onChange={(e) => {
+              setKind(e.target.value as DonationKind)
+              setSaved(false)
+            }}
+          >
+            {DONATION_KINDS[platform].map((k) => (
+              <option key={k} value={k}>
+                {DONATION_KIND_LABELS[k]}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {showTier && (
+        <label>
+          Tier
+          <select
+            value={tier}
+            onChange={(e) => {
+              setTier(Number(e.target.value) as 1 | 2 | 3)
+              setSaved(false)
+            }}
+          >
+            <option value={1}>Tier 1</option>
+            <option value={2}>Tier 2</option>
+            <option value={3}>Tier 3</option>
+          </select>
+        </label>
+      )}
       <label>
-        Amount donated ($)
+        {countLabel}
         <input
           type="number"
-          min={0.01}
-          step={0.01}
-          value={amount}
+          min={kind === 'donation' ? 0.01 : 1}
+          step={kind === 'donation' ? 0.01 : 1}
+          value={count}
           onChange={(e) => {
-            setAmount(Math.max(0, Number(e.target.value) || 0))
+            setCount(Math.max(0, Number(e.target.value) || 0))
             setSaved(false)
           }}
         />
       </label>
-      <button type="submit" disabled={busy || !username.trim() || amount <= 0}>
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={addTime}
+          onChange={(e) => {
+            setAddTime(e.target.checked)
+            setSaved(false)
+          }}
+        />
+        Add time to timer
+      </label>
+      <button type="submit" disabled={busy || !username.trim() || count <= 0}>
         {saved ? 'Added!' : 'Add donation'}
       </button>
       {error && <p className="error-message">{error}</p>}
@@ -470,71 +620,73 @@ function OverlayColorsForm({
   }
 
   return (
-    <form className="control-group" onSubmit={handleSubmit}>
-      <label>
-        Timer pill background
-        <input
-          type="color"
-          value={colors.timerBg}
-          onChange={(e) => handleChange('timerBg', e.target.value)}
-        />
-      </label>
-      <label>
-        Timer pill text
-        <input
-          type="color"
-          value={colors.timerText}
-          onChange={(e) => handleChange('timerText', e.target.value)}
-        />
-      </label>
-      <label>
-        Money pill background
-        <input
-          type="color"
-          value={colors.moneyBg}
-          onChange={(e) => handleChange('moneyBg', e.target.value)}
-        />
-      </label>
-      <label>
-        Money pill text
-        <input
-          type="color"
-          value={colors.moneyText}
-          onChange={(e) => handleChange('moneyText', e.target.value)}
-        />
-      </label>
-      <label>
-        Goal pill background
-        <input
-          type="color"
-          value={colors.goalBg}
-          onChange={(e) => handleChange('goalBg', e.target.value)}
-        />
-      </label>
-      <label>
-        Goal pill text
-        <input
-          type="color"
-          value={colors.goalText}
-          onChange={(e) => handleChange('goalText', e.target.value)}
-        />
-      </label>
-      <label>
-        Goal amount pill background
-        <input
-          type="color"
-          value={colors.goalAmountBg}
-          onChange={(e) => handleChange('goalAmountBg', e.target.value)}
-        />
-      </label>
-      <label>
-        Goal amount pill text
-        <input
-          type="color"
-          value={colors.goalAmountText}
-          onChange={(e) => handleChange('goalAmountText', e.target.value)}
-        />
-      </label>
+    <form className="control-group control-group-stacked" onSubmit={handleSubmit}>
+      <div className="overlay-colors-grid">
+        <label>
+          Timer pill background
+          <input
+            type="color"
+            value={colors.timerBg}
+            onChange={(e) => handleChange('timerBg', e.target.value)}
+          />
+        </label>
+        <label>
+          Timer pill text
+          <input
+            type="color"
+            value={colors.timerText}
+            onChange={(e) => handleChange('timerText', e.target.value)}
+          />
+        </label>
+        <label>
+          Money pill background
+          <input
+            type="color"
+            value={colors.moneyBg}
+            onChange={(e) => handleChange('moneyBg', e.target.value)}
+          />
+        </label>
+        <label>
+          Money pill text
+          <input
+            type="color"
+            value={colors.moneyText}
+            onChange={(e) => handleChange('moneyText', e.target.value)}
+          />
+        </label>
+        <label>
+          Goal pill background
+          <input
+            type="color"
+            value={colors.goalBg}
+            onChange={(e) => handleChange('goalBg', e.target.value)}
+          />
+        </label>
+        <label>
+          Goal pill text
+          <input
+            type="color"
+            value={colors.goalText}
+            onChange={(e) => handleChange('goalText', e.target.value)}
+          />
+        </label>
+        <label>
+          Goal amount pill background
+          <input
+            type="color"
+            value={colors.goalAmountBg}
+            onChange={(e) => handleChange('goalAmountBg', e.target.value)}
+          />
+        </label>
+        <label>
+          Goal amount pill text
+          <input
+            type="color"
+            value={colors.goalAmountText}
+            onChange={(e) => handleChange('goalAmountText', e.target.value)}
+          />
+        </label>
+      </div>
       <button type="submit" disabled={busy}>
         {saved ? 'Saved!' : 'Save'}
       </button>
@@ -593,23 +745,42 @@ function TwitchChannelSelect({
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Tracks the (initialUsername, options) pair `value` was last derived
+  // from, so the block below can tell whether either changed since the
+  // last render — see its comment.
+  const [syncedFrom, setSyncedFrom] = useState({
+    username: initialUsername,
+    options: options as TwitchChannelOption[] | null,
+  })
+
   useEffect(() => {
     getTwitchChannels()
-      .then((opts) => {
-        setOptions(opts)
-        // Twitch logins are case-insensitive, but a timer's saved channel
-        // and these options aren't guaranteed to agree on casing (see
-        // twitch.Client.LookupBroadcasterID) — once we know the options,
-        // snap the selection to whichever one matches so the <select>
-        // (which compares its value to each <option> exactly) actually
-        // shows it as selected instead of appearing unset.
-        const match = opts.find(
-          (o) => o.username.toLowerCase() === initialUsername.toLowerCase(),
-        )
-        if (match) setValue(match.username)
-      })
+      .then(setOptions)
       .catch(() => setOptions([]))
   }, [])
+
+  // Keep the shown selection in sync with the saved channel — both once
+  // `options` loads and if another moderator changes it while this
+  // dashboard is already open. Snapshot (and so twitchChannel) is pushed
+  // to every viewer of this timer over the websocket, but a plain
+  // `useState(initialUsername)` would otherwise only ever reflect that
+  // at mount, leaving an already-open dashboard showing a stale channel
+  // until reloaded. Adjusting state during render (rather than in a
+  // useEffect keyed on the same values) avoids the extra commit/render
+  // pass a useEffect would add for what's really a synchronous
+  // derivation. Twitch logins are case-insensitive, but the saved
+  // channel and these options aren't guaranteed to agree on casing (see
+  // twitch.Client.LookupBroadcasterID), so match case-insensitively and
+  // prefer the option's own casing so the <select> (which compares value
+  // to each <option> exactly) shows it as selected instead of appearing
+  // unset.
+  if (syncedFrom.username !== initialUsername || syncedFrom.options !== options) {
+    setSyncedFrom({ username: initialUsername, options })
+    const match = options?.find(
+      (o) => o.username.toLowerCase() === initialUsername.toLowerCase(),
+    )
+    setValue(match?.username ?? initialUsername)
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -627,8 +798,13 @@ function TwitchChannelSelect({
   }
 
   // The timer's already-saved channel might not be one of this viewer's
-  // options (someone else configured it, or it's no longer moderated) —
-  // keep it selectable rather than silently swapping the dropdown to a
+  // options — most commonly because whoever's logged in now isn't the
+  // channel's broadcaster and doesn't personally moderate it on Twitch
+  // (e.g. a different app-level moderator of this timer than whoever set
+  // the channel originally), not because the channel is actually gone —
+  // GET /api/twitch/channels only ever reflects the signed-in viewer's
+  // own Twitch identity, never whether the saved channel is still valid.
+  // Keep it selectable rather than silently swapping the dropdown to a
   // different value out from under them. Compared case-insensitively:
   // Twitch logins are case-insensitive, and the saved value and these
   // options aren't guaranteed to agree on casing.
@@ -656,9 +832,7 @@ function TwitchChannelSelect({
           >
             <option value="">None</option>
             {!knowsCurrent && (
-              <option value={initialUsername}>
-                {initialUsername} (no longer available)
-              </option>
+              <option value={initialUsername}>{initialUsername} (currently set)</option>
             )}
             {options.map((opt) => (
               <option key={opt.id} value={opt.username}>
@@ -676,6 +850,118 @@ function TwitchChannelSelect({
         <p className="empty">
           Link your Twitch account (or become a moderator somewhere) from{' '}
           <Link to="/account">Account</Link> to pick a channel.
+        </p>
+      )}
+    </form>
+  )
+}
+
+/** The YouTube "which channel should this timer watch" picker: a
+ * dropdown of the signed-in user's own linked YouTube channel(s) (see
+ * GET /api/youtube/channels) — unlike TwitchChannelSelect, never a
+ * "channels I moderate" list, since YouTube only lets a channel's own
+ * linked owner read its live chat (see handleSetYouTubeChannel). Only
+ * mount this once the current value is known (e.g. after the snapshot
+ * has loaded). */
+function YouTubeChannelSelect({
+  initialChannel,
+  initialChannelId,
+  onSave,
+}: {
+  initialChannel: string
+  initialChannelId: string
+  onSave: (channelId: string) => Promise<unknown>
+}) {
+  const [options, setOptions] = useState<YouTubeChannelOption[] | null>(null)
+  const [value, setValue] = useState(initialChannelId)
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getYouTubeChannels()
+      .then(setOptions)
+      .catch(() => setOptions([]))
+  }, [])
+
+  // Keep the shown selection in sync if another moderator changes the
+  // watched channel while this dashboard is already open. Snapshot (and
+  // so youtubeChannelId) is pushed to every viewer of this timer over
+  // the websocket, but a plain `useState(initialChannelId)` would
+  // otherwise only ever reflect that at mount, leaving an already-open
+  // dashboard showing a stale channel until reloaded. Adjusted during
+  // render rather than in a useEffect keyed on the same prop, since this
+  // is really a synchronous derivation, not a sync with an external
+  // system.
+  const [syncedChannelId, setSyncedChannelId] = useState(initialChannelId)
+  if (syncedChannelId !== initialChannelId) {
+    setSyncedChannelId(initialChannelId)
+    setValue(initialChannelId)
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setSaved(false)
+    setError(null)
+    try {
+      await onSave(value)
+      setSaved(true)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // The timer's already-saved channel might not be one of this viewer's
+  // options — most commonly because whoever's logged in now isn't the
+  // channel's own linked YouTube owner (e.g. a different app-level
+  // moderator of this timer than whoever set the channel originally),
+  // not because the channel is actually gone — GET /api/youtube/channels
+  // only ever reflects the signed-in viewer's own linked YouTube
+  // identity, never whether the saved channel is still valid. Keep it
+  // selectable (by ID, its title just for display) rather than silently
+  // swapping the dropdown to a different value out from under them.
+  const knowsCurrent =
+    !initialChannelId || options?.some((o) => o.id === initialChannelId)
+
+  return (
+    <form className="control-group" onSubmit={handleSubmit}>
+      <label>
+        YouTube channel to watch
+        {options === null ? (
+          <input type="text" value="Loading…" disabled readOnly />
+        ) : options.length === 0 && knowsCurrent ? (
+          <input type="text" value="No channels available" disabled readOnly />
+        ) : (
+          <select
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value)
+              setSaved(false)
+            }}
+          >
+            <option value="">None</option>
+            {!knowsCurrent && (
+              <option value={initialChannelId}>{initialChannel} (currently set)</option>
+            )}
+            {options.map((opt) => (
+              <option key={opt.id} value={opt.id}>
+                {opt.title}
+              </option>
+            ))}
+          </select>
+        )}
+      </label>
+      <button type="submit" disabled={busy || options === null}>
+        {saved ? 'Saved!' : 'Save'}
+      </button>
+      {error && <p className="error-message">{error}</p>}
+      {options !== null && options.length === 0 && (
+        <p className="empty">
+          Link your YouTube account from <Link to="/account">Account</Link>{' '}
+          to pick a channel.
         </p>
       )}
     </form>
@@ -778,6 +1064,19 @@ function ModeratorsSection({
   )
 }
 
+// Options for the "Recent contributors" time-window filter. minutes is 0
+// for "All time" — every other value filters events out once they're
+// older than that many minutes.
+const EVENTS_WINDOW_OPTIONS: { label: string; minutes: number }[] = [
+  { label: 'All time', minutes: 0 },
+  { label: 'Last 5 minutes', minutes: 5 },
+  { label: 'Last 15 minutes', minutes: 15 },
+  { label: 'Last 30 minutes', minutes: 30 },
+  { label: 'Last hour', minutes: 60 },
+  { label: 'Last 3 hours', minutes: 180 },
+  { label: 'Last 24 hours', minutes: 1440 },
+]
+
 export default function Dashboard() {
   const { timerId } = useParams<{ timerId: string }>()
   const { snapshot, connected } = useSubathon(timerId)
@@ -790,6 +1089,8 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null)
   const [isOwner, setIsOwner] = useState<boolean | null>(null)
   const [milestones, setMilestones] = useState<MoneyMilestone[]>([])
+  const [eventsWindowMinutes, setEventsWindowMinutes] = useState(0)
+  const [removingEventId, setRemovingEventId] = useState<string | null>(null)
 
   useEffect(() => {
     if (!timerId) return
@@ -818,6 +1119,7 @@ export default function Dashboard() {
 
   const overlayUrl = `${window.location.origin}/t/${timerId}/overlay`
   const goalsOverlayUrl = `${window.location.origin}/t/${timerId}/goals-overlay`
+  const throneWebhookUrl = `${window.location.origin}/webhooks/throne/${timerId}`
 
   const handleReset = async () => {
     setBusy(true)
@@ -852,6 +1154,31 @@ export default function Dashboard() {
       setError(controlErrorMessage(err))
     } finally {
       setBusy(false)
+    }
+  }
+
+  // Removes a contribution from the recent-contributors list, reversing
+  // its effect on the clock/money total server-side (see
+  // Timer.RemoveEvent) — e.g. for a mistaken or fraudulent entry. Tracks
+  // its own busy state (removingEventId) rather than the shared `busy`
+  // flag so it doesn't disable every other control on the page while in
+  // flight.
+  const handleRemoveEvent = async (eventId: string) => {
+    if (
+      !window.confirm(
+        'Remove this contribution? Its time and money will be subtracted from the timer.',
+      )
+    ) {
+      return
+    }
+    setRemovingEventId(eventId)
+    setError(null)
+    try {
+      await removeEvent(timerId, eventId)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setRemovingEventId(null)
     }
   }
 
@@ -976,15 +1303,47 @@ export default function Dashboard() {
               initialUsername={snapshot.kickChannel ?? ''}
               onSave={(username) => setKickChannel(timerId, username)}
             />
+            <YouTubeChannelSelect
+              initialChannel={snapshot.youtubeChannel ?? ''}
+              initialChannelId={snapshot.youtubeChannelId ?? ''}
+              onSave={(channelId) => setYouTubeChannel(timerId, channelId)}
+            />
             <StreamElementsForm timerId={timerId} />
-            <MoneyGoalForm
-              initialGoal={snapshot.moneyGoal ?? 0}
-              onSave={(goal) => setMoneyGoal(timerId, goal)}
-            />
-            <MoneyRaisedForm
-              initialAmount={snapshot.totalMoneyRaised}
-              onSave={(amount) => setMoneyRaised(timerId, amount)}
-            />
+            <form className="control-group" onSubmit={handleAddEvent}>
+              <label>
+                Test event: username
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="viewer123"
+                />
+              </label>
+              <label>
+                Seconds to add
+                <input
+                  type="number"
+                  min={1}
+                  value={secondsAdded}
+                  onChange={(e) => setSecondsAdded(Number(e.target.value))}
+                />
+              </label>
+              <label>
+                Dollars to add
+                <input
+                  type="number"
+                  min={0}
+                  step={0.01}
+                  value={moneyAdded}
+                  onChange={(e) =>
+                    setMoneyAdded(Math.max(0, Number(e.target.value) || 0))
+                  }
+                />
+              </label>
+              <button type="submit" disabled={busy}>
+                Add test event
+              </button>
+            </form>
             <OverlayColorsForm
               initialColors={snapshot.overlayColors}
               onSave={(colors) => setOverlayColors(timerId, colors)}
@@ -1011,10 +1370,10 @@ export default function Dashboard() {
             onClick={handleResume}
             disabled={busy || snapshot?.running}
           >
-            Start
+            Play
           </button>
           <button onClick={handleStop} disabled={busy || !snapshot?.running}>
-            Stop
+            Pause
           </button>
         </div>
 
@@ -1063,66 +1422,148 @@ export default function Dashboard() {
               {snapshot?.hidden ? 'Unhide' : 'Hide'}
             </button>
           </div>
+          <div className="control-row">
+            <div className="control-toggle">
+              <span
+                className={`status ${snapshot?.ended ? 'status-down' : 'status-ok'}`}
+              >
+                {snapshot?.ended ? '⏹ Ended' : 'Active'}
+              </span>
+              <span className="control-hint">
+                {snapshot?.ended
+                  ? 'No longer receiving live events or chat commands'
+                  : 'Reachable by live events and "!timer ..." chat commands'}
+              </span>
+            </div>
+            <button
+              onClick={() => {
+                if (
+                  !snapshot?.ended &&
+                  !window.confirm(
+                    'End this subathon? It will stop receiving live events and "!timer ..." chat commands.',
+                  )
+                ) {
+                  return
+                }
+                handleToggle(snapshot?.ended ? unendSubathon : endSubathon)
+              }}
+              disabled={busy}
+            >
+              {snapshot?.ended ? 'Reopen' : 'End subathon'}
+            </button>
+          </div>
         </div>
 
         <AddDonationForm timerId={timerId} />
 
-        <form className="control-group" onSubmit={handleAddEvent}>
-          <label>
-            Test event: username
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              placeholder="viewer123"
+        {snapshot && (
+          <>
+            <MoneyGoalForm
+              initialGoal={snapshot.moneyGoal ?? 0}
+              onSave={(goal) => setMoneyGoal(timerId, goal)}
             />
-          </label>
-          <label>
-            Seconds to add
-            <input
-              type="number"
-              min={1}
-              value={secondsAdded}
-              onChange={(e) => setSecondsAdded(Number(e.target.value))}
+            <MoneyRaisedForm
+              initialAmount={snapshot.totalMoneyRaised}
+              onSave={(amount) => setMoneyRaised(timerId, amount)}
             />
-          </label>
-          <label>
-            Dollars to add
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={moneyAdded}
-              onChange={(e) =>
-                setMoneyAdded(Math.max(0, Number(e.target.value) || 0))
-              }
-            />
-          </label>
-          <button type="submit" disabled={busy}>
-            Add test event
-          </button>
-        </form>
+          </>
+        )}
       </section>
 
       <section className="events">
-        <h2>Recent contributors</h2>
-        {snapshot && snapshot.recentEvents.length > 0 ? (
-          <ul>
-            {[...snapshot.recentEvents].reverse().map((event) => (
-              <li key={event.id}>
-                <span className="platform">{event.platform}</span>
-                <span>{event.username || 'anonymous'}</span>
-                <span>{event.type}</span>
-                <span>+{formatDuration(event.secondsAdded)}</span>
-                {event.moneyAdded ? (
-                  <span>+${formatMoney(event.moneyAdded)}</span>
-                ) : null}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="empty">No events yet.</p>
-        )}
+        <div className="events-header">
+          <h2>Recent contributors</h2>
+          <label className="events-window">
+            Show
+            <select
+              value={eventsWindowMinutes}
+              onChange={(e) => setEventsWindowMinutes(Number(e.target.value))}
+            >
+              {EVENTS_WINDOW_OPTIONS.map((opt) => (
+                <option key={opt.minutes} value={opt.minutes}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        {(() => {
+          const cutoff =
+            eventsWindowMinutes > 0 ? Date.now() - eventsWindowMinutes * 60_000 : null
+          const visibleEvents =
+            cutoff === null
+              ? snapshot?.recentEvents ?? []
+              : (snapshot?.recentEvents ?? []).filter(
+                  (event) => new Date(event.occurred).getTime() >= cutoff,
+                )
+
+          return visibleEvents.length > 0 ? (
+            <ul>
+              {[...visibleEvents].reverse().map((event) => (
+                <li key={event.id}>
+                  <span className="platform">{event.platform}</span>
+                  <span>{event.username || 'anonymous'}</span>
+                  <span>
+                    {event.type}
+                    {event.type === 'gifted_sub' && event.amount ? ` x${event.amount}` : ''}
+                  </span>
+                  <span>+{formatDuration(event.secondsAdded)}</span>
+                  {event.moneyAdded ? (
+                    <span>+${formatMoney(event.moneyAdded)}</span>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="event-remove"
+                    title="Remove this contribution"
+                    onClick={() => handleRemoveEvent(event.id)}
+                    disabled={removingEventId === event.id}
+                  >
+                    {removingEventId === event.id ? '…' : '✕'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="empty">
+              {snapshot && snapshot.recentEvents.length > 0
+                ? 'No events in this time window.'
+                : 'No events yet.'}
+            </p>
+          )
+        })()}
+      </section>
+
+      <section className="overlay-link">
+        <h2>Throne integration</h2>
+        <p className="empty">
+          <a href="https://throne.com" target="_blank" rel="noreferrer">
+            Throne
+          </a>{' '}
+          is a wishlist/gifting platform creators can link fans to instead
+          of (or alongside) Twitch/Kick/YouTube — gifts and contributions
+          count toward this timer's clock and money goal using the "Throne"
+          row on the Reward settings page, the same "Donation (per $1)"
+          rate the other donation platforms use.
+        </p>
+        <p className="empty">
+          To set it up: in Throne, go to{' '}
+          <a
+            href="https://throne.com/profile/integrations/webhook"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Profile &rarr; Integrations &rarr; Webhook
+          </a>
+          , paste the URL below as the subscriber URL, and enable the
+          integration. Every gift and contribution sent to your Throne
+          wishlist will then be applied to this timer automatically —
+          there's nothing to connect on this side, and this timer doesn't
+          need to be running for it to apply (same as YouTube above).
+        </p>
+        <OverlayUrlField
+          label="Throne webhook URL (paste into Throne's Webhook integration settings)"
+          url={throneWebhookUrl}
+        />
       </section>
 
       <footer>
@@ -1133,14 +1574,15 @@ export default function Dashboard() {
           Twitch, the watched channel's own broadcaster (not just a
           moderator) must have signed into this app with Twitch at least
           once to grant permission — Kick channels work immediately, no
-          sign-in needed from anyone. YouTube listeners are still stubbed
-          on the backend.
+          sign-in needed from anyone. YouTube channels apply regardless of
+          whether this timer is running, and the watched channel's owner
+          must have signed in with YouTube first.
         </p>
         <p>
           On Twitch, this timer's own moderators or broadcaster can also
-          type <code>!timer pause</code>, <code>!timer unpause</code>,{' '}
+          type <code>!timer pause</code>, <code>!timer play</code>,{' '}
           <code>!timer lock</code>, <code>!timer unlock</code>,{' '}
-          <code>!timer hide</code>, or <code>!timer unhide</code> in that
+          <code>!timer hide</code>, or <code>!timer show</code> in that
           channel's chat — same effect as the buttons above.
         </p>
       </footer>

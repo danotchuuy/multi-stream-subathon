@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
 	"regexp"
 	"time"
 
@@ -20,7 +22,9 @@ import (
 	"github.com/danotchuuy/multi-stream-subathon/internal/oauth"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/kick"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/streamelements"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/throne"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/twitch"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/youtube"
 	"github.com/danotchuuy/multi-stream-subathon/internal/subathon"
 	"github.com/danotchuuy/multi-stream-subathon/internal/ws"
 )
@@ -43,19 +47,53 @@ type Deps struct {
 	// /webhooks/kick and live Kick events (KICK_CLIENT_ID unset).
 	Kick *kick.Client
 
-	// StreamElements resolves/validates a timer owner's own JWT token
-	// (see handleSetStreamElementsToken). Always non-nil: unlike
-	// Twitch/Kick there's no server-level app credential to gate this on.
+	// StreamElements resolves an OAuth2 access token to the channel it
+	// belongs to (see handleStreamElementsOAuthCallback). Always non-nil,
+	// even if StreamElementsOAuth is nil (unconfigured) — the REST
+	// wrapper itself needs no app credential.
 	StreamElements *streamelements.Client
 
+	// StreamElementsOAuth drives the "Connect StreamElements" flow (see
+	// streamelements_oauth.go) using this server's own registered app
+	// credential. Nil disables it (STREAMELEMENTS_CLIENT_ID unset) — same
+	// gating as Twitch/Kick above, unlike the old JWT-paste flow this
+	// replaced, which had no server-level credential to gate on.
+	StreamElementsOAuth *oauth.Provider
+
 	// StreamElementsPoller is told to start/stop polling a timer whenever
-	// its StreamElements token changes (see handleSetStreamElementsToken).
+	// its connected StreamElements account changes (see
+	// handleStreamElementsOAuthCallback/handleDisconnectStreamElements).
 	StreamElementsPoller *streamelements.Poller
+
+	// YouTube resolves an access token to the channel it belongs to and
+	// checks whether it's currently live. Always non-nil — the REST/gRPC
+	// wrapper itself needs no app credential (see YouTubePoller, which
+	// does).
+	YouTube *youtube.Client
+
+	// YouTubePoller is told to (re)start/stop watching a timer's YouTube
+	// channel whenever it changes (see handleSetYouTubeChannel). Always
+	// non-nil; a nil provider inside it (YOUTUBE_CLIENT_ID unset) makes
+	// Watch a no-op, same effective gating as Twitch/Kick above.
+	YouTubePoller *youtube.Poller
+
+	// Throne verifies and parses Throne webhook notifications (see
+	// internal/platform/throne). Unlike every other integration above,
+	// this needs no server-level app credential — Throne's signing key is
+	// fixed and published — so it's always non-nil and
+	// /webhooks/throne/{timerID} is always mounted.
+	Throne *throne.Client
 
 	// AllowedOrigin is the frontend's origin, used both for CORS and as
 	// the base URL to redirect back to after an OAuth flow completes.
 	AllowedOrigin string
 	CookieSecure  bool
+
+	// UIDistDir is the path to the built frontend assets (frontend/dist
+	// after `npm run build`). Empty skips static file serving entirely,
+	// so the Go API can still run standalone behind the Vite dev server
+	// during local development.
+	UIDistDir string
 }
 
 // New builds the router: auth (OAuth login/link, session, /api/me), REST
@@ -109,7 +147,27 @@ func New(deps Deps) http.Handler {
 				r.Post("/control/unlock", handleTimerAction(deps.Hub, "unlock", func(t *subathon.Timer) error { return t.SetLocked(false) }))
 				r.Post("/control/hide", handleTimerAction(deps.Hub, "hide", func(t *subathon.Timer) error { return t.SetHidden(true) }))
 				r.Post("/control/unhide", handleTimerAction(deps.Hub, "unhide", func(t *subathon.Timer) error { return t.SetHidden(false) }))
+				// Ending/reopening a timer — unlike lock/hide above, this is
+				// dashboard-only (no "!timer end" chat command; see
+				// Timer.SetEnded) and also stops/resumes its StreamElements
+				// poller goroutine, the one listener Manager's channel-keyed
+				// queries don't already cover.
+				r.Post("/control/end", handleTimerAction(deps.Hub, "end", func(t *subathon.Timer) error {
+					if err := t.SetEnded(true); err != nil {
+						return err
+					}
+					deps.StreamElementsPoller.Stop(t.ID())
+					return nil
+				}))
+				r.Post("/control/unend", handleTimerAction(deps.Hub, "unend", func(t *subathon.Timer) error {
+					if err := t.SetEnded(false); err != nil {
+						return err
+					}
+					deps.StreamElementsPoller.Watch(t)
+					return nil
+				}))
 				r.Post("/events", handleAddEvent(deps.Hub))
+				r.Delete("/events/{eventID}", handleRemoveEvent(deps.Hub))
 				r.Get("/reward-rules", handleGetRewardRules())
 				r.Put("/reward-rules", handleSaveRewardRules())
 				r.Get("/money-rules", handleGetMoneyRules())
@@ -120,8 +178,10 @@ func New(deps Deps) http.Handler {
 				r.Put("/overlay-colors", handleSetOverlayColors(deps.Hub))
 				r.Put("/twitch-channel", handleSetTwitchChannel(deps))
 				r.Put("/kick-channel", handleSetKickChannel(deps))
-				r.Get("/stream-elements-token", handleGetStreamElementsStatus())
-				r.Put("/stream-elements-token", handleSetStreamElementsToken(deps))
+				r.Put("/youtube-channel", handleSetYouTubeChannel(deps))
+				r.Get("/stream-elements-token", handleGetStreamElementsStatus(deps))
+				r.Delete("/stream-elements-token", handleDisconnectStreamElements(deps))
+				r.Get("/stream-elements/oauth/start", handleStreamElementsOAuthStart(deps))
 				r.Get("/moderators", handleListModerators(deps))
 			})
 
@@ -140,6 +200,7 @@ func New(deps Deps) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(requireAuth(deps.Auth))
 		r.Get("/api/twitch/channels", handleListTwitchChannels(deps))
+		r.Get("/api/youtube/channels", handleListYouTubeChannels(deps))
 	})
 
 	// Public: Twitch/Kick post their webhook notifications here;
@@ -150,11 +211,44 @@ func New(deps Deps) http.Handler {
 	if deps.Kick != nil {
 		r.Post("/webhooks/kick", handleKickWebhook(deps))
 	}
+	// Public, and per-timer rather than a single shared endpoint like
+	// Twitch/Kick above: Throne has no OAuth flow or broadcaster-ID
+	// subscription to route by, so the timer ID is embedded directly in
+	// the URL a creator pastes into Throne's own dashboard — same token
+	// model as /ws/{timerID} below. Authenticated by Ed25519 signature
+	// (see throne.Client.VerifyMessage), not a session.
+	r.Post("/webhooks/throne/{timerID}", handleThroneWebhook(deps))
 
 	// Public: the timer ID is the overlay's token, no login required.
 	r.Get("/ws/{timerID}", handleWS(deps.Manager, deps.Hub))
 
+	// Serve the built frontend (dashboard + overlay) for everything that
+	// didn't match an API route above, so a single container can serve
+	// the whole app behind one origin. Skipped entirely if UIDistDir is
+	// unset/missing, so the API still runs standalone behind the Vite
+	// dev server during local development.
+	if info, err := os.Stat(deps.UIDistDir); deps.UIDistDir != "" && err == nil && info.IsDir() {
+		r.NotFound(spaHandler(deps.UIDistDir))
+	}
+
 	return r
+}
+
+// spaHandler serves static files out of dir, falling back to
+// dir/index.html for any request that doesn't match a real file. That
+// fallback is what lets client-side routes (react-router) resolve
+// correctly on a hard refresh or deep link, since the browser is
+// requesting a path the server itself never mounted.
+func spaHandler(dir string) http.HandlerFunc {
+	fileServer := http.FileServer(http.Dir(dir))
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := filepath.Join(dir, filepath.Clean(r.URL.Path))
+		if info, err := os.Stat(path); err != nil || info.IsDir() {
+			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
+			return
+		}
+		fileServer.ServeHTTP(w, r)
+	}
 }
 
 func handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -257,8 +351,9 @@ type resetRequest struct {
 	InitialSeconds int `json:"initialSeconds"`
 }
 
-// handleReset (re)initializes the clock to the given duration and starts it
-// running, discarding any time left over from a previous run.
+// handleReset (re)initializes the clock to the given duration, discarding
+// any time left over from a previous run. Leaves the timer stopped (see
+// Timer.Reset) — a separate Resume/play call starts it.
 func handleReset(hub *ws.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t := timerFromContext(r)
@@ -320,7 +415,7 @@ func handleStop(hub *ws.Hub) http.HandlerFunc {
 // its snapshot — the shared shape behind the lock/unlock/hide/unhide
 // control endpoints, which only differ in which Timer method they call.
 // Also what a moderator's "!timer lock"/"!timer unlock"/"!timer hide"/
-// "!timer unhide" chat command runs (see twitch_webhook.go's
+// "!timer show" chat command runs (see twitch_webhook.go's
 // applyChatCommand), just reached over HTTP instead of chat, for a
 // manual toggle from the dashboard.
 func handleTimerAction(hub *ws.Hub, verb string, action func(*subathon.Timer) error) http.HandlerFunc {
@@ -386,6 +481,27 @@ func handleAddEvent(hub *ws.Hub) http.HandlerFunc {
 
 		hub.Broadcast(t.ID(), t.Snapshot())
 		writeJSON(w, http.StatusCreated, t.Snapshot())
+	}
+}
+
+// handleRemoveEvent deletes a previously recorded event (e.g. a mistaken or
+// fraudulent contribution caught after the fact) from the dashboard's
+// recent-contributors list, reversing its effect on the clock and money
+// goal — see Timer.RemoveEvent. 404s if eventID isn't among this timer's
+// recent events.
+func handleRemoveEvent(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+		eventID := chi.URLParam(r, "eventID")
+
+		if err := t.RemoveEvent(eventID); err != nil {
+			log.Printf("server: remove event %s from timer %s: %v", eventID, t.ID(), err)
+			http.Error(w, "event not found", http.StatusNotFound)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
 	}
 }
 
