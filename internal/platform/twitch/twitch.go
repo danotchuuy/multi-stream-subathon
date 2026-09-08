@@ -90,6 +90,65 @@ type Client struct {
 
 	seenMu sync.Mutex
 	seen   map[string]time.Time // EventSub message ID -> when first seen
+
+	// recentSubscribesMu/recentSubscribes back MarkSubscribed/
+	// RecentlySubscribed, keyed by "<broadcasterID>:<lowercased
+	// username>" -> when that user's channel.subscribe was credited.
+	recentSubscribesMu sync.Mutex
+	recentSubscribes   map[string]time.Time
+}
+
+// recentSubscribeWindow bounds how long after crediting a
+// channel.subscribe MarkSubscribed remembers it — long enough to catch
+// the channel.subscription.message Twitch fires alongside it for a
+// lapsed-then-resubscribed user sharing their (non-continuous) total
+// months, comfortably short enough not to risk suppressing a genuine
+// later resub from the same viewer.
+const recentSubscribeWindow = 90 * time.Second
+
+// subscriberKey identifies one (broadcaster, viewer) pair for
+// MarkSubscribed/RecentlySubscribed, lowercasing the username so the two
+// event types' payloads compare equal regardless of casing.
+func subscriberKey(broadcasterUserID, username string) string {
+	return broadcasterUserID + ":" + strings.ToLower(username)
+}
+
+// MarkSubscribed records that broadcasterUserID's channel.subscribe for
+// username was just credited, so a channel.subscription.message that
+// follows shortly after for the same pair can be recognized (see
+// RecentlySubscribed) as Twitch's double-fire for that same action
+// rather than a separate resub — Twitch sends both when a lapsed
+// subscriber resubscribes (a "new" subscription period, hence
+// channel.subscribe) and also shares a message about their cumulative
+// (non-continuous) months (hence channel.subscription.message).
+func (c *Client) MarkSubscribed(broadcasterUserID, username string) {
+	c.recentSubscribesMu.Lock()
+	defer c.recentSubscribesMu.Unlock()
+
+	if c.recentSubscribes == nil {
+		c.recentSubscribes = make(map[string]time.Time)
+	}
+	c.recentSubscribes[subscriberKey(broadcasterUserID, username)] = time.Now()
+}
+
+// RecentlySubscribed reports whether broadcasterUserID's channel.subscribe
+// for username was credited within the last recentSubscribeWindow (see
+// MarkSubscribed), consuming the record either way so it's only ever
+// consulted once. Callers use this to skip crediting a
+// channel.subscription.message that's really just Twitch's companion
+// notification for a channel.subscribe already credited, not an
+// independent resub.
+func (c *Client) RecentlySubscribed(broadcasterUserID, username string) bool {
+	c.recentSubscribesMu.Lock()
+	defer c.recentSubscribesMu.Unlock()
+
+	key := subscriberKey(broadcasterUserID, username)
+	seenAt, ok := c.recentSubscribes[key]
+	if !ok {
+		return false
+	}
+	delete(c.recentSubscribes, key)
+	return time.Since(seenAt) < recentSubscribeWindow
 }
 
 // New creates a Client from cfg. cfg.WebhookSecret must be set; callers
@@ -377,12 +436,25 @@ func (c *Client) SeenBefore(messageID string) bool {
 // past Twitch's redelivery window.
 func (c *Client) Sweep() {
 	c.seenMu.Lock()
-	defer c.seenMu.Unlock()
-
 	cutoff := time.Now().Add(-15 * time.Minute)
 	for id, seenAt := range c.seen {
 		if seenAt.Before(cutoff) {
 			delete(c.seen, id)
+		}
+	}
+	c.seenMu.Unlock()
+
+	// recentSubscribes entries are only ever meant to live for
+	// recentSubscribeWindow; anything older than that already answered
+	// false the one time it could still matter (see RecentlySubscribed),
+	// so this is just bounding memory from a broadcaster/viewer pair
+	// whose companion channel.subscription.message never arrived.
+	c.recentSubscribesMu.Lock()
+	defer c.recentSubscribesMu.Unlock()
+	subCutoff := time.Now().Add(-recentSubscribeWindow)
+	for key, markedAt := range c.recentSubscribes {
+		if markedAt.Before(subCutoff) {
+			delete(c.recentSubscribes, key)
 		}
 	}
 }

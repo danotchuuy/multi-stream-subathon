@@ -103,6 +103,15 @@ type TimerRecord struct {
 	StatIconBitsColor      string
 	StatIconDonationsColor string
 
+	// PanelBg/PanelText/PanelAccentBg/PanelAccentText are hex colors
+	// customizing the top-10 leaderboard panel (see Timer.SetPanelColors).
+	// Empty means not yet customized — callers layer DefaultPanelColors
+	// on top.
+	PanelBg         string
+	PanelText       string
+	PanelAccentBg   string
+	PanelAccentText string
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }

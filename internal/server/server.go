@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -138,6 +139,12 @@ func New(deps Deps) http.Handler {
 			// reached) without a login.
 			r.Get("/money-milestones", handleGetMoneyMilestones())
 
+			// Public too, same token — backs the top-10 leaderboard panel
+			// (meant for a Twitch "panel" under a channel's About section,
+			// not an authenticated view), same reasoning as /events, which
+			// this re-scans and aggregates.
+			r.Get("/leaderboard", handleGetLeaderboard())
+
 			r.Group(func(r chi.Router) {
 				r.Use(requireAuth(deps.Auth))
 				r.Use(requireOwnerOrModerator())
@@ -180,6 +187,7 @@ func New(deps Deps) http.Handler {
 				r.Put("/stats-rotation", handleSetStatsRotation(deps.Hub))
 				r.Put("/contribution-counts", handleSetContributionCounts(deps.Hub))
 				r.Put("/stat-icons", handleSetStatIcons(deps.Hub))
+				r.Put("/panel-colors", handleSetPanelColors(deps.Hub))
 				r.Put("/twitch-channel", handleSetTwitchChannel(deps))
 				r.Put("/kick-channel", handleSetKickChannel(deps))
 				r.Put("/youtube-channel", handleSetYouTubeChannel(deps))
@@ -349,6 +357,28 @@ func handleListEvents() http.HandlerFunc {
 	}
 }
 
+// handleGetLeaderboard returns the top 10 contributors in each "gift
+// category" (subs, bits/Kicks, tips/donations — see
+// subathon.Timer.Leaderboard), re-scanning the timer's full event
+// history each call. Backs the leaderboard panel page, meant to be
+// added as a Twitch "panel" or similar static embed rather than
+// refreshed every second like the live overlays, so this cost is fine
+// at whatever interval that page polls on.
+func handleGetLeaderboard() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		board, err := t.Leaderboard()
+		if err != nil {
+			log.Printf("server: compute leaderboard for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to compute leaderboard", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, board)
+	}
+}
+
 type resetRequest struct {
 	// InitialSeconds is how long the clock should be (re)initialized to.
 	// Optional; server default is used when omitted.
@@ -438,12 +468,21 @@ func handleTimerAction(hub *ws.Hub, verb string, action func(*subathon.Timer) er
 }
 
 type addEventRequest struct {
-	Platform     subathon.Platform  `json:"platform"`
-	Type         subathon.EventType `json:"type"`
-	Username     string             `json:"username"`
-	SecondsAdded int                `json:"secondsAdded"`
-	MoneyAdded   float64            `json:"moneyAdded,omitempty"`
-	Amount       float64            `json:"amount,omitempty"`
+	Platform subathon.Platform  `json:"platform"`
+	Type     subathon.EventType `json:"type"`
+	Username string             `json:"username"`
+	// SecondsAdded is a float64, not an int, even though
+	// subathon.Event.SecondsAdded itself is a whole number of seconds:
+	// a caller computing it as count * secondsPerUnit for a dollar-
+	// denominated contribution (e.g. the dashboard's "Add donation" form,
+	// for a non-whole-dollar StreamElements/Throne tip like $4.33) can
+	// easily land on a JS/JSON float like 259.79999999999995 — decoding
+	// that straight into an int field fails outright ("invalid request
+	// body") rather than just losing sub-second precision nobody needed
+	// anyway, so this rounds it instead (see below).
+	SecondsAdded float64 `json:"secondsAdded"`
+	MoneyAdded   float64 `json:"moneyAdded,omitempty"`
+	Amount       float64 `json:"amount,omitempty"`
 }
 
 // handleAddEvent lets you manually add a contributor event: either a raw
@@ -473,7 +512,7 @@ func handleAddEvent(hub *ws.Hub) http.HandlerFunc {
 			Platform:     req.Platform,
 			Type:         req.Type,
 			Username:     req.Username,
-			SecondsAdded: req.SecondsAdded,
+			SecondsAdded: int(math.Round(req.SecondsAdded)),
 			MoneyAdded:   req.MoneyAdded,
 			Amount:       req.Amount,
 		})
@@ -749,6 +788,38 @@ func handleSetOverlayColors(hub *ws.Hub) http.HandlerFunc {
 		if err := t.SetOverlayColors(colors); err != nil {
 			log.Printf("server: set overlay colors for timer %s: %v", t.ID(), err)
 			http.Error(w, "failed to set overlay colors", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+// handleSetPanelColors changes the top-10 leaderboard panel's colors
+// (see the styling page's leaderboard-panel section). An empty field
+// falls back to subathon.DefaultPanelColors for that field; a non-empty
+// one must be a 6-digit hex color.
+func handleSetPanelColors(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var colors subathon.PanelColors
+		if err := json.NewDecoder(r.Body).Decode(&colors); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		fields := []string{colors.Bg, colors.Text, colors.AccentBg, colors.AccentText}
+		for _, c := range fields {
+			if c != "" && !hexColorRE.MatchString(c) {
+				http.Error(w, "colors must be 6-digit hex, e.g. #111111", http.StatusBadRequest)
+				return
+			}
+		}
+
+		if err := t.SetPanelColors(colors); err != nil {
+			log.Printf("server: set panel colors for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set panel colors", http.StatusInternalServerError)
 			return
 		}
 

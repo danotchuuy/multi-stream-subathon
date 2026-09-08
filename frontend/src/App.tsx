@@ -7,6 +7,7 @@ import GoalsOverlay from './pages/GoalsOverlay'
 import History from './pages/History'
 import Login from './pages/Login'
 import Overlay from './pages/Overlay'
+import Panel from './pages/Panel'
 import Privacy from './pages/Privacy'
 import Rewards from './pages/Rewards'
 import Styling from './pages/Styling'
@@ -29,6 +30,10 @@ export default function App() {
               the timer's money-milestone list, so it can be placed/sized
               independently in a scene from the main timer/money overlay. */}
           <Route path="/t/:timerId/goals-overlay" element={<GoalsOverlay />} />
+          {/* Public too, same token — the top-10 leaderboard panel, meant
+              for a Twitch "panel" or other static embed rather than an
+              OBS browser source (see Panel.tsx's own doc comment). */}
+          <Route path="/t/:timerId/panel" element={<Panel />} />
           {/* Public too — same token, and the contribution history it
               shows is already part of the public Snapshot's recent-events
               list, just uncapped. */}

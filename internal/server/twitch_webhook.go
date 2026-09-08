@@ -238,6 +238,23 @@ func handleTwitchNotification(deps Deps, messageID string, body []byte) {
 		return
 	}
 
+	// Twitch fires both channel.subscribe and channel.subscription.message
+	// for a lapsed-then-resubscribed viewer who shares a message about
+	// their (non-continuous) total months: channel.subscribe because it's
+	// technically a new subscription period, channel.subscription.message
+	// because they shared a resub message. Left alone, that credits the
+	// same action twice — once as a sub, once as a resub. Since
+	// channel.subscribe always arrives first, remember it and skip the
+	// companion message that follows shortly after for the same viewer.
+	switch parsed.Type {
+	case subathon.EventSub:
+		deps.Twitch.MarkSubscribed(parsed.BroadcasterUserID, parsed.Username)
+	case subathon.EventResub:
+		if deps.Twitch.RecentlySubscribed(parsed.BroadcasterUserID, parsed.Username) {
+			return
+		}
+	}
+
 	for _, t := range deps.Manager.RunningByTwitchChannel(parsed.BroadcasterUserID) {
 		rules, err := t.RewardRules()
 		if err != nil {

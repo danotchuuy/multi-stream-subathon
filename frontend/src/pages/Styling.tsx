@@ -2,15 +2,18 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
 import {
+  getLeaderboard,
   getMoneyMilestones,
   setContributionCounts,
   setOverlayColors,
+  setPanelColors,
   setStatIcons,
   setStatsRotation,
   HttpError,
 } from '../lib/api'
-import { formatMoney, formatWholeMoney } from '../lib/format'
+import { formatCompactCount, formatDuration, formatWholeMoney } from '../lib/format'
 import {
+  CategoryIcon,
   DEFAULT_ICON_VALUES,
   EMOJI_OPTIONS,
   RotatingStatPill,
@@ -18,7 +21,14 @@ import {
   StatSvgIcon,
   SVG_ICON_OPTIONS,
 } from '../lib/statRotation'
-import type { MoneyMilestone, OverlayColors, StatIconStyle, StatIcons } from '../types'
+import type {
+  Leaderboard,
+  MoneyMilestone,
+  OverlayColors,
+  PanelColors,
+  StatIconStyle,
+  StatIcons,
+} from '../types'
 
 function controlErrorMessage(err: unknown): string {
   if (err instanceof HttpError) {
@@ -357,6 +367,88 @@ function StatIconsForm({
   )
 }
 
+/** Lets the owner/moderator pick the leaderboard panel's colors — bg/
+ * text for the page itself, accentBg/accentText for each category's
+ * heading bar (see PanelColors). colors/onChange are controlled by the
+ * parent, same lifted-state pattern as the overlay colors/icons above,
+ * so the preview below reflects every edit immediately. */
+function PanelColorsForm({
+  colors,
+  onChange,
+  onSave,
+}: {
+  colors: PanelColors
+  onChange: (colors: PanelColors) => void
+  onSave: () => Promise<unknown>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleChange = (field: keyof PanelColors, value: string) => {
+    onChange({ ...colors, [field]: value })
+    setSaved(false)
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setSaved(false)
+    setError(null)
+    try {
+      await onSave()
+      setSaved(true)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="control-group control-group-stacked" onSubmit={handleSubmit}>
+      <div className="overlay-colors-grid">
+        <label>
+          Page background
+          <input
+            type="color"
+            value={colors.bg}
+            onChange={(e) => handleChange('bg', e.target.value)}
+          />
+        </label>
+        <label>
+          Page text
+          <input
+            type="color"
+            value={colors.text}
+            onChange={(e) => handleChange('text', e.target.value)}
+          />
+        </label>
+        <label>
+          Category heading background
+          <input
+            type="color"
+            value={colors.accentBg}
+            onChange={(e) => handleChange('accentBg', e.target.value)}
+          />
+        </label>
+        <label>
+          Category heading text
+          <input
+            type="color"
+            value={colors.accentText}
+            onChange={(e) => handleChange('accentText', e.target.value)}
+          />
+        </label>
+      </div>
+      <button type="submit" disabled={busy}>
+        {saved ? 'Saved!' : 'Save panel colors'}
+      </button>
+      {error && <p className="error-message">{error}</p>}
+    </form>
+  )
+}
+
 /**
  * Full-page timer styling editor, moved out of the dashboard's control
  * grid so there's room for a live preview alongside the color pickers —
@@ -372,6 +464,8 @@ export default function Styling() {
   const [milestones, setMilestones] = useState<MoneyMilestone[]>([])
   const [colors, setColors] = useState<OverlayColors | null>(null)
   const [icons, setIcons] = useState<StatIcons | null>(null)
+  const [panelColors, setPanelColorsState] = useState<PanelColors | null>(null)
+  const [leaderboard, setLeaderboard] = useState<Leaderboard | null>(null)
   const [previewDark, setPreviewDark] = useState(true)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -390,12 +484,22 @@ export default function Styling() {
   if (snapshot && icons === null) {
     setIcons(snapshot.statIcons)
   }
+  if (snapshot && panelColors === null) {
+    setPanelColorsState(snapshot.panelColors)
+  }
 
   useEffect(() => {
     if (!timerId) return
     getMoneyMilestones(timerId)
       .then(setMilestones)
       .catch(() => setMilestones([]))
+  }, [timerId])
+
+  useEffect(() => {
+    if (!timerId) return
+    getLeaderboard(timerId)
+      .then(setLeaderboard)
+      .catch(() => setLeaderboard({ subs: [], bits: [], donations: [] }))
   }, [timerId])
 
   if (!timerId) {
@@ -467,7 +571,7 @@ export default function Styling() {
 
       {error && <p className="error-message">{error}</p>}
 
-      {colors === null || icons === null ? (
+      {colors === null || icons === null || panelColors === null ? (
         <p className="empty">Loading…</p>
       ) : (
         <>
@@ -527,7 +631,9 @@ export default function Styling() {
                   className="overlay-pill"
                   style={{ background: colors.timerBg, color: colors.timerText }}
                 >
-                  <span className="overlay-clock">02:14:37</span>
+                  <span className="overlay-clock">
+                    {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+                  </span>
                 </div>
               </div>
               <div className="overlay-goals-list">
@@ -546,7 +652,7 @@ export default function Styling() {
                           color: colors.goalAmountText,
                         }}
                       >
-                        {reached ? '✓' : `$${formatMoney(m.amount)}`}
+                        {reached ? '✓' : `$${formatWholeMoney(m.amount)}`}
                       </span>
                       <span className="overlay-goal-label">{m.label}</span>
                     </div>
@@ -708,6 +814,75 @@ export default function Styling() {
                 {saved ? 'Saved!' : 'Save styling'}
               </button>
             </form>
+          </section>
+
+          <section className="styling-panel-section">
+            <h2>Leaderboard panel</h2>
+            <p className="control-hint">
+              A separate page showing the top 10 contributors in each
+              category — screenshot it for a Twitch panel image (Twitch's
+              own panels only support a static image plus a link, not a
+              live embed), add it as its own OBS browser source, or share
+              the link directly (see its URL on the timer page).
+            </p>
+            <div
+              className="styling-panel-preview"
+              style={{ background: panelColors.bg, color: panelColors.text }}
+            >
+              <h3 className="panel-title">{snapshot?.name ?? 'Top Contributors'}</h3>
+              {!leaderboard ? (
+                <p className="panel-loading">Loading…</p>
+              ) : (
+                <div className="panel-categories">
+                  {STAT_CATEGORIES.map((cat) => {
+                    const entries = leaderboard[cat.iconKey]
+                    return (
+                      <section key={cat.iconKey} className="panel-category">
+                        <div
+                          className="panel-category-heading"
+                          style={{
+                            background: panelColors.accentBg,
+                            color: panelColors.accentText,
+                          }}
+                        >
+                          <CategoryIcon
+                            icons={icons}
+                            category={cat}
+                            className="panel-category-icon"
+                          />
+                          {cat.label}
+                        </div>
+                        {entries.length === 0 ? (
+                          <p className="panel-empty">No contributions yet.</p>
+                        ) : (
+                          <ol className="panel-list">
+                            {entries.map((entry, i) => (
+                              <li key={entry.username}>
+                                <span className="panel-rank">{i + 1}</span>
+                                <span className="panel-username">{entry.username}</span>
+                                <span className="panel-amount">
+                                  {cat.countPrefix}
+                                  {formatCompactCount(entry.amount)}
+                                </span>
+                              </li>
+                            ))}
+                          </ol>
+                        )}
+                      </section>
+                    )
+                  })}
+                </div>
+              )}
+            </div>
+            <p className="control-hint">
+              This is exactly the markup the /panel page renders — what
+              you see here is what shows up there.
+            </p>
+            <PanelColorsForm
+              colors={panelColors}
+              onChange={setPanelColorsState}
+              onSave={() => setPanelColors(timerId, panelColors)}
+            />
           </section>
         </>
       )}

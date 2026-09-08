@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
 import { getMoneyMilestones } from '../lib/api'
-import { formatMoney } from '../lib/format'
+import { formatWholeMoney } from '../lib/format'
 import { DEFAULT_OVERLAY_COLORS } from '../lib/overlayColors'
 import type { MoneyMilestone } from '../types'
 
@@ -88,7 +88,7 @@ export default function GoalsOverlay() {
                   color: colors.goalAmountText,
                 }}
               >
-                {reached ? '✓' : `$${formatMoney(m.amount)}`}
+                {reached ? '✓' : `$${formatWholeMoney(m.amount)}`}
               </span>
               <span className="overlay-goal-label">
                 {m.hidden ? <PulsingDots /> : m.label}

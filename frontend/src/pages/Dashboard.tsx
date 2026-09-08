@@ -428,11 +428,16 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   const moneyPerUnit = moneyRules?.[item][platform] ?? 0
   // Bits/Kicks are priced per 100 (see RewardBits100); everything else is
   // priced per unit directly — same split as twitch.ParsedEvent.Seconds/
-  // Money.
+  // Money. Rounded either way: count is a whole number for every kind
+  // except "donation" (a dollar amount, e.g. 4.33), and secondsAdded
+  // must reach the server as a whole number of seconds — the backend's
+  // SecondsAdded field is an int, so a non-whole-dollar tip's raw
+  // count * secondsPerUnit (a JS float, e.g. 259.79999999999995) would
+  // otherwise fail to decode there as "invalid request body".
   const seconds =
     item === 'bits_100'
       ? Math.ceil((count * secondsPerUnit) / 100)
-      : count * secondsPerUnit
+      : Math.round(count * secondsPerUnit)
   const money =
     item === 'bits_100'
       ? (count * moneyPerUnit) / 100
@@ -1004,6 +1009,7 @@ export default function Dashboard() {
 
   const overlayUrl = `${window.location.origin}/t/${timerId}/overlay`
   const goalsOverlayUrl = `${window.location.origin}/t/${timerId}/goals-overlay`
+  const panelUrl = `${window.location.origin}/t/${timerId}/panel`
   const throneWebhookUrl = `${window.location.origin}/webhooks/throne/${timerId}`
 
   const handleReset = async () => {
@@ -1175,6 +1181,10 @@ export default function Dashboard() {
         <OverlayUrlField
           label="Goals overlay URL (a separate OBS browser source for the milestone list)"
           url={goalsOverlayUrl}
+        />
+        <OverlayUrlField
+          label="Leaderboard panel URL (top 10 subs/bits/tips — screenshot for a Twitch panel image, or use as its own OBS browser source)"
+          url={panelUrl}
         />
       </section>
 

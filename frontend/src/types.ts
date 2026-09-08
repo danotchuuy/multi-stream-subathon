@@ -93,6 +93,35 @@ export interface Snapshot {
   /** Which icon the rotating stat list uses per category. Always fully
    * populated (server fills in defaults), never partial. */
   statIcons: StatIcons
+
+  /** Colors for the top-10 leaderboard panel. Always fully populated
+   * (server fills in defaults), never partial. */
+  panelColors: PanelColors
+}
+
+/** Customizes the top-10 leaderboard panel's colors — see PUT
+ * /api/timers/{id}/panel-colors. bg/text are the page's own background
+ * and body text; accentBg/accentText are each category's heading bar. */
+export interface PanelColors {
+  bg: string
+  text: string
+  accentBg: string
+  accentText: string
+}
+
+/** One contributor's total in a single "gift category" on the
+ * leaderboard panel — see GET /api/timers/{id}/leaderboard. */
+export interface LeaderboardEntry {
+  username: string
+  amount: number
+}
+
+/** The top 10 contributors in each of the three "gift categories",
+ * most-given first. */
+export interface Leaderboard {
+  subs: LeaderboardEntry[]
+  bits: LeaderboardEntry[]
+  donations: LeaderboardEntry[]
 }
 
 /** Which of two representations StatIcons' per-category fields hold:

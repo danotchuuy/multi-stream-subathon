@@ -263,11 +263,39 @@ func (p *Poller) applyMessage(t *subathon.Timer, item *youtubepb.LiveChatMessage
 		eventType, rewardItem, count = subathon.EventSub, subathon.RewardTier1Sub, 1
 
 	case youtubepb.LiveChatMessageSnippet_TypeWrapper_MEMBERSHIP_GIFTING_EVENT:
-		giftCount := snippet.GetMembershipGiftingDetails().GetGiftMembershipsCount()
+		details := snippet.GetMembershipGiftingDetails()
+		giftCount := details.GetGiftMembershipsCount()
 		if giftCount <= 0 {
+			// Diagnostic for a report that gifted memberships aren't
+			// being tracked: internal/youtubepb's message-gifting field
+			// numbers were hand-transcribed from YouTube's REST API docs
+			// (which don't publish gRPC wire numbers), unlike the
+			// well-exercised text/Super Chat/new-member fields ported
+			// from multi-stream-moderation — if that number is off,
+			// GetMembershipGiftingDetails would silently decode as
+			// empty here even though the type itself came through fine.
+			// This makes that distinction visible instead of just
+			// dropping the event with no trace.
+			log.Printf("youtube: got membership gifting event for timer %s from %q but gift_memberships_count was %d (details present: %v, level %q) — not counted",
+				t.ID(), username, giftCount, details != nil, details.GetGiftMembershipsLevelName())
 			return false
 		}
 		eventType, rewardItem, count = subathon.EventGiftedSub, subathon.RewardGiftedSub, float64(giftCount)
+
+	case youtubepb.LiveChatMessageSnippet_TypeWrapper_GIFT_MEMBERSHIP_RECEIVED_EVENT:
+		// Deliberately not counted (see the package doc comment on
+		// applyMessage) — this is the per-recipient echo of a
+		// MEMBERSHIP_GIFTING_EVENT purchase, which already gets
+		// credited to the gifter above. Logged (not acted on) so a
+		// report of "gifted memberships aren't tracked" can be checked
+		// against whether this per-recipient event is arriving
+		// reliably even if the summary one above isn't — if it is and
+		// the summary event isn't, that pins the bug on
+		// MEMBERSHIP_GIFTING_EVENT's own field decoding specifically.
+		details := snippet.GetGiftMembershipReceivedDetails()
+		log.Printf("youtube: got gift membership received event for timer %s (recipient %q, gifter channel %q, associated gifting message %q) — not counted, see the matching membershipGiftingEvent",
+			t.ID(), username, details.GetGifterChannelId(), details.GetAssociatedMembershipGiftingMessageId())
+		return false
 
 	default:
 		return false

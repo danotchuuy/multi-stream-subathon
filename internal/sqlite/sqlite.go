@@ -93,6 +93,10 @@ CREATE TABLE IF NOT EXISTS timers (
 	stat_icon_subs_color          TEXT NOT NULL DEFAULT '',
 	stat_icon_bits_color          TEXT NOT NULL DEFAULT '',
 	stat_icon_donations_color     TEXT NOT NULL DEFAULT '',
+	panel_bg                      TEXT NOT NULL DEFAULT '',
+	panel_text                    TEXT NOT NULL DEFAULT '',
+	panel_accent_bg               TEXT NOT NULL DEFAULT '',
+	panel_accent_text             TEXT NOT NULL DEFAULT '',
 	created_at                    TEXT NOT NULL,
 	updated_at                    TEXT NOT NULL
 );
@@ -340,6 +344,7 @@ func Open(path string) (*Repo, error) {
 	for _, col := range []string{
 		"stat_icon_style", "stat_icon_subs", "stat_icon_bits", "stat_icon_donations",
 		"stat_icon_subs_color", "stat_icon_bits_color", "stat_icon_donations_color",
+		"panel_bg", "panel_text", "panel_accent_bg", "panel_accent_text",
 	} {
 		if err := addColumnIfMissing(db, "timers", col, "TEXT NOT NULL DEFAULT ''"); err != nil {
 			db.Close()
@@ -489,6 +494,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		       subs_given, bits_given, donations_given, show_stats_rotation,
 		       stat_icon_style, stat_icon_outline, stat_icon_subs, stat_icon_bits, stat_icon_donations,
 		       stat_icon_subs_color, stat_icon_bits_color, stat_icon_donations_color,
+		       panel_bg, panel_text, panel_accent_bg, panel_accent_text,
 		       created_at, updated_at
 		FROM timers
 		ORDER BY created_at`)
@@ -520,6 +526,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 			&rec.SubsGiven, &rec.BitsGiven, &rec.DonationsGiven, &showStatsRotation,
 			&rec.StatIconStyle, &statIconOutline, &rec.StatIconSubs, &rec.StatIconBits, &rec.StatIconDonations,
 			&rec.StatIconSubsColor, &rec.StatIconBitsColor, &rec.StatIconDonationsColor,
+			&rec.PanelBg, &rec.PanelText, &rec.PanelAccentBg, &rec.PanelAccentText,
 			&createdAt, &updatedAt); err != nil {
 			return nil, fmt.Errorf("scan timer row: %w", err)
 		}
@@ -562,6 +569,7 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		     subs_given = ?, bits_given = ?, donations_given = ?, show_stats_rotation = ?,
 		     stat_icon_style = ?, stat_icon_outline = ?, stat_icon_subs = ?, stat_icon_bits = ?, stat_icon_donations = ?,
 		     stat_icon_subs_color = ?, stat_icon_bits_color = ?, stat_icon_donations_color = ?,
+		     panel_bg = ?, panel_text = ?, panel_accent_bg = ?, panel_accent_text = ?,
 		     updated_at = ?
 		 WHERE id = ?`,
 		boolToInt(rec.Running), nullableTime(rec.StartedAt), nullableTime(rec.EndsAt),
@@ -577,6 +585,7 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		rec.SubsGiven, rec.BitsGiven, rec.DonationsGiven, boolToInt(rec.StatsRotationEnabled),
 		rec.StatIconStyle, boolToInt(rec.StatIconOutline), rec.StatIconSubs, rec.StatIconBits, rec.StatIconDonations,
 		rec.StatIconSubsColor, rec.StatIconBitsColor, rec.StatIconDonationsColor,
+		rec.PanelBg, rec.PanelText, rec.PanelAccentBg, rec.PanelAccentText,
 		formatTime(rec.UpdatedAt), rec.ID,
 	)
 	if err != nil {

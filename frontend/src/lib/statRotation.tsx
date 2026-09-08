@@ -305,6 +305,36 @@ export const STAT_CATEGORIES: {
   },
 ]
 
+/** Renders one STAT_CATEGORIES entry's icon — an emoji, or in 'svg'
+ * style a <StatSvgIcon> in that category's own color — the same icon/
+ * color resolution RotatingStatPill uses per rotation, factored out so
+ * other pages (e.g. the leaderboard panel) can show the same icon
+ * identity for a category without re-deriving this logic themselves. */
+export function CategoryIcon({
+  icons,
+  category,
+  className,
+}: {
+  icons: StatIcons
+  category: (typeof STAT_CATEGORIES)[number]
+  className?: string
+}) {
+  const iconValue = icons[category.iconKey]
+  return (
+    <span
+      className={className}
+      aria-hidden="true"
+      style={icons.style === 'svg' ? { color: icons[category.colorKey] } : undefined}
+    >
+      {icons.style === 'svg' ? (
+        <StatSvgIcon iconKey={iconValue} outline={icons.outline} />
+      ) : (
+        iconValue
+      )}
+    </span>
+  )
+}
+
 /** Cycles 0..length-1 on a fixed interval — drives which STAT_CATEGORIES
  * entry the overlay/preview currently shows. */
 function useRotatingIndex(length: number, intervalMs: number): number {
@@ -351,7 +381,6 @@ export function RotatingStatPill({
   const index = useRotatingIndex(STAT_CATEGORIES.length, STAT_ROTATION_INTERVAL_MS)
   const category = STAT_CATEGORIES[index]
   const counts = { subsGiven, bitsGiven, donationsGiven }
-  const iconValue = icons[category.iconKey]
 
   return (
     <div
@@ -359,17 +388,7 @@ export function RotatingStatPill({
       style={{ background: colors.timerBg, color: colors.timerText }}
     >
       <span key={category.key} className="overlay-stats-content">
-        <span
-          className="overlay-stats-icon"
-          aria-hidden="true"
-          style={icons.style === 'svg' ? { color: icons[category.colorKey] } : undefined}
-        >
-          {icons.style === 'svg' ? (
-            <StatSvgIcon iconKey={iconValue} outline={icons.outline} />
-          ) : (
-            iconValue
-          )}
-        </span>
+        <CategoryIcon icons={icons} category={category} className="overlay-stats-icon" />
         <span className="overlay-stats-count">
           {category.countPrefix}
           {formatCompactCount(counts[category.key])}

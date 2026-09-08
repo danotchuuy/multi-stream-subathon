@@ -59,12 +59,47 @@ interface ContributorTotal {
   totalMoney: number
 }
 
+type ContributorSortKey = 'username' | 'events' | 'totalSeconds' | 'totalMoney'
+
+const CONTRIBUTOR_SORT_LABELS: Record<ContributorSortKey, string> = {
+  username: 'Username',
+  events: 'Events',
+  totalSeconds: 'Total time added',
+  totalMoney: 'Total money added',
+}
+
+const CONTRIBUTOR_SORT_KEYS: ContributorSortKey[] = [
+  'username',
+  'events',
+  'totalSeconds',
+  'totalMoney',
+]
+
+function compareContributors(
+  a: ContributorTotal,
+  b: ContributorTotal,
+  key: ContributorSortKey,
+): number {
+  switch (key) {
+    case 'username':
+      return a.username.localeCompare(b.username)
+    case 'events':
+      return a.events - b.events
+    case 'totalSeconds':
+      return a.totalSeconds - b.totalSeconds
+    case 'totalMoney':
+      return a.totalMoney - b.totalMoney
+  }
+}
+
 export default function History() {
   const { timerId } = useParams<{ timerId: string }>()
   const [events, setEvents] = useState<SubathonEvent[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sortKey, setSortKey] = useState<SortKey>('occurred')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [contributorSortKey, setContributorSortKey] = useState<ContributorSortKey>('totalSeconds')
+  const [contributorSortDir, setContributorSortDir] = useState<'asc' | 'desc'>('desc')
   const [selected, setSelected] = useState<string | null>(null)
 
   useEffect(() => {
@@ -90,8 +125,15 @@ export default function History() {
       entry.totalMoney += e.moneyAdded ?? 0
       totals.set(username, entry)
     }
-    return [...totals.values()].sort((a, b) => b.totalSeconds - a.totalSeconds)
+    return [...totals.values()]
   }, [events])
+
+  const sortedContributors = useMemo(() => {
+    return [...contributors].sort((a, b) => {
+      const cmp = compareContributors(a, b, contributorSortKey)
+      return contributorSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [contributors, contributorSortKey, contributorSortDir])
 
   const visibleEvents = useMemo(() => {
     if (!events) return []
@@ -120,6 +162,15 @@ export default function History() {
     } else {
       setSortKey(key)
       setSortDir('desc')
+    }
+  }
+
+  const handleContributorSort = (key: ContributorSortKey) => {
+    if (key === contributorSortKey) {
+      setContributorSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setContributorSortKey(key)
+      setContributorSortDir('desc')
     }
   }
 
@@ -154,14 +205,26 @@ export default function History() {
               <table className="reward-table">
                 <thead>
                   <tr>
-                    <th>Username</th>
-                    <th>Events</th>
-                    <th>Total time added</th>
-                    <th>Total money added</th>
+                    {CONTRIBUTOR_SORT_KEYS.map((key) => (
+                      <th key={key}>
+                        <button
+                          type="button"
+                          onClick={() => handleContributorSort(key)}
+                          className="sort-header"
+                        >
+                          {CONTRIBUTOR_SORT_LABELS[key]}
+                          {contributorSortKey === key
+                            ? contributorSortDir === 'asc'
+                              ? ' ▲'
+                              : ' ▼'
+                            : ''}
+                        </button>
+                      </th>
+                    ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {contributors.map((c) => (
+                  {sortedContributors.map((c) => (
                     <tr
                       key={c.username}
                       onClick={() =>

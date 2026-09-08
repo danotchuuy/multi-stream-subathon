@@ -78,6 +78,55 @@ func fillOverlayColorDefaults(c OverlayColors) OverlayColors {
 	return c
 }
 
+// PanelColors customizes the top-10 leaderboard panel's colors (see
+// Timer.SetPanelColors and Timer.Leaderboard) — meant for a page added
+// as a Twitch "panel" under a channel's About section, or anywhere else
+// a static, opaque page fits better than the transparent OBS overlays
+// above. Bg/Text are the page's own background and body text;
+// AccentBg/AccentText are each category's heading bar. Always fully
+// populated (DefaultPanelColors fills in anything unset), never a zero
+// value.
+type PanelColors struct {
+	Bg   string `json:"bg"`
+	Text string `json:"text"`
+
+	AccentBg   string `json:"accentBg"`
+	AccentText string `json:"accentText"`
+}
+
+// DefaultPanelColors is used for any field a timer hasn't customized —
+// a dark page background rather than OverlayColors' transparent-pill
+// black, since this panel is meant to stand alone (not composite over
+// video) and needs its own real background.
+func DefaultPanelColors() PanelColors {
+	return PanelColors{
+		Bg:   "#0f1115",
+		Text: "#e6e8eb",
+
+		AccentBg:   "#7c5cff",
+		AccentText: "#ffffff",
+	}
+}
+
+// fillPanelColorDefaults returns c with DefaultPanelColors filled in for
+// any field left empty.
+func fillPanelColorDefaults(c PanelColors) PanelColors {
+	d := DefaultPanelColors()
+	if c.Bg == "" {
+		c.Bg = d.Bg
+	}
+	if c.Text == "" {
+		c.Text = d.Text
+	}
+	if c.AccentBg == "" {
+		c.AccentBg = d.AccentBg
+	}
+	if c.AccentText == "" {
+		c.AccentText = d.AccentText
+	}
+	return c
+}
+
 // StatIconStyle selects which of two representations StatIcons' per-
 // category fields hold: a native emoji character (whose color is fixed
 // by the emoji font and can't be overridden) or a monochrome SVG icon
@@ -266,6 +315,11 @@ type Snapshot struct {
 	// StatIconStyle — always populated (DefaultStatIcons until
 	// customized), never the zero value.
 	StatIcons StatIcons `json:"statIcons"`
+
+	// PanelColors customizes the top-10 leaderboard panel's colors — see
+	// Timer.SetPanelColors and Timer.Leaderboard. Always populated
+	// (DefaultPanelColors until customized), never the zero value.
+	PanelColors PanelColors `json:"panelColors"`
 }
 
 // Timer holds one subathon clock's mutable state behind a mutex. It is
@@ -364,6 +418,11 @@ type Timer struct {
 	// value.
 	statIcons StatIcons
 
+	// panelColors customizes the top-10 leaderboard panel's colors;
+	// always fully populated (see fillPanelColorDefaults), never a zero
+	// value.
+	panelColors PanelColors
+
 	// moderatorIDs are the accounts (besides the owner) allowed to control
 	// this timer: reset/resume/stop, add events, reward rules, watched
 	// channels — everything except managing this list itself. See
@@ -428,6 +487,13 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 			SubsColor:      rec.StatIconSubsColor,
 			BitsColor:      rec.StatIconBitsColor,
 			DonationsColor: rec.StatIconDonationsColor,
+		}),
+		panelColors: fillPanelColorDefaults(PanelColors{
+			Bg:   rec.PanelBg,
+			Text: rec.PanelText,
+
+			AccentBg:   rec.PanelAccentBg,
+			AccentText: rec.PanelAccentText,
 		}),
 		moderatorIDs: mods,
 	}
@@ -823,6 +889,24 @@ func (t *Timer) SetStatIcons(icons StatIcons) error {
 	return t.persistLocked()
 }
 
+// PanelColors returns this timer's configured leaderboard-panel colors,
+// with DefaultPanelColors filled in for anything unset.
+func (t *Timer) PanelColors() PanelColors {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.panelColors
+}
+
+// SetPanelColors changes the leaderboard panel's colors. An empty field
+// falls back to DefaultPanelColors for that field.
+func (t *Timer) SetPanelColors(colors PanelColors) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.panelColors = fillPanelColorDefaults(colors)
+	return t.persistLocked()
+}
+
 // contributionCounts reports how much e should add to subsGiven,
 // bitsGiven, and donationsGiven — at most one of the three is nonzero
 // per event, since EventType already partitions every real contribution
@@ -1099,6 +1183,7 @@ func (t *Timer) Snapshot() Snapshot {
 		DonationsGiven:       t.donationsGiven,
 		StatsRotationEnabled: t.statsRotationEnabled,
 		StatIcons:            t.statIcons,
+		PanelColors:          t.panelColors,
 	}
 }
 
@@ -1154,6 +1239,10 @@ func (t *Timer) persistLocked() error {
 		StatIconSubsColor:            t.statIcons.SubsColor,
 		StatIconBitsColor:            t.statIcons.BitsColor,
 		StatIconDonationsColor:       t.statIcons.DonationsColor,
+		PanelBg:                      t.panelColors.Bg,
+		PanelText:                    t.panelColors.Text,
+		PanelAccentBg:                t.panelColors.AccentBg,
+		PanelAccentText:              t.panelColors.AccentText,
 		UpdatedAt:                    time.Now(),
 	})
 }

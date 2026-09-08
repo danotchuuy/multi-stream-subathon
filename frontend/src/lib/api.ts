@@ -1,11 +1,13 @@
 import type {
   AuthPlatform,
   EventType,
+  Leaderboard,
   Me,
   Moderator,
   MoneyMilestone,
   MoneyRules,
   OverlayColors,
+  PanelColors,
   Platform,
   RewardRules,
   Snapshot,
@@ -229,6 +231,15 @@ export function getMoneyMilestones(
   return request(`/api/timers/${timerId}/money-milestones`)
 }
 
+/** GET the top 10 contributors in each gift category (subs, bits/Kicks,
+ * tips/donations), re-scanning the timer's full event history each
+ * call. Public, same as getState: the timer ID is the token. Backs the
+ * leaderboard panel page — poll this on an interval rather than every
+ * second like the live overlays. */
+export function getLeaderboard(timerId: string): Promise<Leaderboard> {
+  return request(`/api/timers/${timerId}/leaderboard`)
+}
+
 /** Replaces a timer's milestone list wholesale. */
 export function saveMoneyMilestones(
   timerId: string,
@@ -287,6 +298,18 @@ export function setStatIcons(
   return request(`/api/timers/${timerId}/stat-icons`, {
     method: 'PUT',
     body: JSON.stringify(icons),
+  })
+}
+
+/** Changes the leaderboard panel's colors. An empty field falls back to
+ * the server's defaults. */
+export function setPanelColors(
+  timerId: string,
+  colors: PanelColors,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/panel-colors`, {
+    method: 'PUT',
+    body: JSON.stringify(colors),
   })
 }
 

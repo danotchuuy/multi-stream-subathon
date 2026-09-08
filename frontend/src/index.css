@@ -423,6 +423,10 @@ a {
   margin-top: 24px;
 }
 
+.styling-panel-section {
+  margin-top: 24px;
+}
+
 /* ContributionCountsForm's three number inputs — a fixed 3-column grid
    like .overlay-colors-grid, so the fields line up instead of reflowing
    at the container's whim. */
@@ -950,4 +954,137 @@ footer {
   background: rgba(0, 0, 0, 0.6);
   padding: 12px 20px;
   border-radius: 8px;
+}
+
+/* Leaderboard panel (Panel.tsx) — unlike the overlay pages above, this
+   page has its own real (customizable) background rather than
+   compositing transparently over OBS video, since it's meant for a
+   Twitch "panel"/static embed instead. */
+
+.panel-page {
+  min-height: 100vh;
+  margin: 0;
+  padding: 28px 20px;
+  box-sizing: border-box;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+.panel-title {
+  margin: 0 0 20px;
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.panel-error {
+  color: var(--down);
+  text-align: center;
+}
+
+.panel-loading {
+  text-align: center;
+  opacity: 0.7;
+}
+
+.panel-categories {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.panel-category {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.panel-category-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.panel-category-icon {
+  display: inline-flex;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.panel-category-icon svg {
+  width: 1em;
+  height: 1em;
+  display: block;
+}
+
+.panel-empty {
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 13px;
+  opacity: 0.7;
+}
+
+.panel-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.panel-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 14px;
+  /* currentColor-based rather than a fixed white/black tint, so the
+     divider stays visible regardless of which text color is picked. */
+  border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent);
+}
+
+.panel-list li:first-child {
+  border-top: none;
+}
+
+.panel-rank {
+  width: 1.5em;
+  flex-shrink: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+.panel-username {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.panel-amount {
+  flex-shrink: 0;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Styling.tsx's leaderboard-panel preview — reuses Panel.tsx's own
+   .panel-title/.panel-categories/etc. classes verbatim (true WYSIWYG,
+   same markup) inside a contained box instead of that page's full
+   min-height:100vh, since it's embedded inline here rather than being
+   the whole page. Unlike the checkerboard overlay preview above, this
+   has no transparency to demonstrate — the panel is a real opaque page,
+   not composited over OBS video — so it's just a plain bordered box. */
+.styling-panel-preview {
+  margin-top: 10px;
+  padding: 24px 20px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+
+.styling-panel-preview .panel-categories {
+  max-width: none;
 }
