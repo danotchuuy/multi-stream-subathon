@@ -174,6 +174,12 @@ func New(deps Deps) http.Handler {
 					deps.StreamElementsPoller.Watch(t)
 					return nil
 				}))
+				// "Start Happy Hour": the dashboard's equivalent of a
+				// moderator's "!timer hh <duration>" chat command (see
+				// twitch_webhook.go's startHappyHour) — doubles time
+				// contributions for a chosen duration and announces it on
+				// this timer's configured Twitch channel, if any.
+				r.Post("/control/happy-hour", handleStartHappyHour(deps))
 				r.Post("/events", handleAddEvent(deps.Hub))
 				r.Delete("/events/{eventID}", handleRemoveEvent(deps.Hub))
 				r.Get("/reward-rules", handleGetRewardRules())
@@ -515,6 +521,7 @@ func handleAddEvent(hub *ws.Hub) http.HandlerFunc {
 			SecondsAdded: int(math.Round(req.SecondsAdded)),
 			MoneyAdded:   req.MoneyAdded,
 			Amount:       req.Amount,
+			AddedBy:      userFromContext(r).DisplayName,
 		})
 		if err != nil {
 			log.Printf("server: add event to timer %s: %v", t.ID(), err)

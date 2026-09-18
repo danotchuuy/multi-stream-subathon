@@ -22,7 +22,7 @@ export type RewardPlatform =
   | 'streamelements'
   | 'throne'
 
-export type EventType = 'sub' | 'resub' | 'gifted_sub' | 'donation' | 'bits' | 'manual'
+export type EventType = 'sub' | 'resub' | 'gifted_sub' | 'donation' | 'bits' | 'gems' | 'manual'
 
 export interface SubathonEvent {
   id: string
@@ -36,6 +36,8 @@ export interface SubathonEvent {
   moneyAdded?: number
   amount?: number
   occurred: string
+  /** Display name of the dashboard user who entered this by hand. */
+  addedBy?: string
 }
 
 export interface Snapshot {
@@ -71,6 +73,12 @@ export interface Snapshot {
    * command — only reachable from the dashboard, never chat. Manual
    * events and every other dashboard control still work regardless. */
   ended: boolean
+  /** While true, a "!timer hh <duration>"/dashboard "Start Happy Hour"
+   * boost has every real contribution's time value doubled; boostEndsAt
+   * (ISO timestamp) is when it ends. False (and boostEndsAt absent) once
+   * expired, not just when none has ever been started. */
+  boostActive: boolean
+  boostEndsAt?: string
   /** Colors for the public overlays' pills. Always fully populated
    * (server fills in defaults), never partial. */
   overlayColors: OverlayColors
@@ -195,6 +203,7 @@ export type RewardItem =
   | 'gifted_tier2_sub'
   | 'gifted_tier3_sub'
   | 'bits_100'
+  | 'gems_100'
   | 'donation_unit'
 
 /** Seconds awarded per contribution, keyed by item then by platform. */

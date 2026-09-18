@@ -72,6 +72,13 @@ a {
   max-width: 960px;
 }
 
+/* Wider still — for the History page, whose event table has eight
+   columns (time, username, platform, event, amount, time added, money
+   added, added by). */
+.dashboard-history {
+  max-width: 1200px;
+}
+
 .dashboard header {
   display: flex;
   align-items: center;

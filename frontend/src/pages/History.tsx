@@ -12,6 +12,7 @@ type SortKey =
   | 'amount'
   | 'secondsAdded'
   | 'moneyAdded'
+  | 'addedBy'
 
 const SORT_LABELS: Record<SortKey, string> = {
   occurred: 'Time',
@@ -21,6 +22,7 @@ const SORT_LABELS: Record<SortKey, string> = {
   amount: 'Amount',
   secondsAdded: 'Time added',
   moneyAdded: 'Money added',
+  addedBy: 'Added by',
 }
 
 const SORT_KEYS: SortKey[] = [
@@ -31,6 +33,7 @@ const SORT_KEYS: SortKey[] = [
   'amount',
   'secondsAdded',
   'moneyAdded',
+  'addedBy',
 ]
 
 function compare(a: SubathonEvent, b: SubathonEvent, key: SortKey): number {
@@ -49,6 +52,8 @@ function compare(a: SubathonEvent, b: SubathonEvent, key: SortKey): number {
       return a.secondsAdded - b.secondsAdded
     case 'moneyAdded':
       return (a.moneyAdded ?? 0) - (b.moneyAdded ?? 0)
+    case 'addedBy':
+      return (a.addedBy ?? '').localeCompare(b.addedBy ?? '')
   }
 }
 
@@ -92,6 +97,9 @@ function compareContributors(
   }
 }
 
+// Options for the contributors panel's row limit; 0 means show everyone.
+const CONTRIBUTOR_LIMIT_OPTIONS = [5, 10, 25, 50, 0]
+
 export default function History() {
   const { timerId } = useParams<{ timerId: string }>()
   const [events, setEvents] = useState<SubathonEvent[] | null>(null)
@@ -100,7 +108,10 @@ export default function History() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [contributorSortKey, setContributorSortKey] = useState<ContributorSortKey>('totalSeconds')
   const [contributorSortDir, setContributorSortDir] = useState<'asc' | 'desc'>('desc')
+  const [contributorLimit, setContributorLimit] = useState(10)
   const [selected, setSelected] = useState<string | null>(null)
+  // '' means all platforms.
+  const [platformFilter, setPlatformFilter] = useState('')
 
   useEffect(() => {
     if (!timerId) return
@@ -109,10 +120,24 @@ export default function History() {
       .catch(() => setError('Failed to load contribution history.'))
   }, [timerId])
 
+  const platforms = useMemo(
+    () => [...new Set((events ?? []).map((e) => e.platform))].sort(),
+    [events],
+  )
+
+  // Events after the platform filter — feeds both the contributor totals
+  // and the event table, so the two always agree.
+  const platformEvents = useMemo(
+    () =>
+      platformFilter
+        ? (events ?? []).filter((e) => e.platform === platformFilter)
+        : (events ?? []),
+    [events, platformFilter],
+  )
+
   const contributors = useMemo(() => {
-    if (!events) return []
     const totals = new Map<string, ContributorTotal>()
-    for (const e of events) {
+    for (const e of platformEvents) {
       const username = e.username || 'anonymous'
       const entry = totals.get(username) ?? {
         username,
@@ -126,7 +151,7 @@ export default function History() {
       totals.set(username, entry)
     }
     return [...totals.values()]
-  }, [events])
+  }, [platformEvents])
 
   const sortedContributors = useMemo(() => {
     return [...contributors].sort((a, b) => {
@@ -136,20 +161,19 @@ export default function History() {
   }, [contributors, contributorSortKey, contributorSortDir])
 
   const visibleEvents = useMemo(() => {
-    if (!events) return []
     const filtered = selected
-      ? events.filter((e) => (e.username || 'anonymous') === selected)
-      : events
+      ? platformEvents.filter((e) => (e.username || 'anonymous') === selected)
+      : platformEvents
     const sorted = [...filtered].sort((a, b) => {
       const cmp = compare(a, b, sortKey)
       return sortDir === 'asc' ? cmp : -cmp
     })
     return sorted
-  }, [events, sortKey, sortDir, selected])
+  }, [platformEvents, sortKey, sortDir, selected])
 
   if (!timerId) {
     return (
-      <div className="dashboard">
+      <div className="dashboard dashboard-history">
         <p>No timer ID in URL.</p>
         <Link to="/">Back to timers</Link>
       </div>
@@ -177,7 +201,7 @@ export default function History() {
   const selectedTotal = contributors.find((c) => c.username === selected)
 
   return (
-    <div className="dashboard">
+    <div className="dashboard dashboard-history">
       <header>
         <div>
           <Link to={`/t/${timerId}`} className="back-link">
@@ -189,6 +213,23 @@ export default function History() {
 
       {error && <p className="error-message">{error}</p>}
 
+      {events && events.length > 0 && (
+        <label className="events-window">
+          Platform
+          <select
+            value={platformFilter}
+            onChange={(e) => setPlatformFilter(e.target.value)}
+          >
+            <option value="">All platforms</option>
+            {platforms.map((platform) => (
+              <option key={platform} value={platform}>
+                {platform}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+
       {!events ? (
         <p className="empty">Loading…</p>
       ) : events.length === 0 ? (
@@ -196,7 +237,22 @@ export default function History() {
       ) : (
         <>
           <section className="events">
-            <h2>Contributors</h2>
+            <div className="events-header">
+              <h2>Contributors</h2>
+              <label className="events-window">
+                Show
+                <select
+                  value={contributorLimit}
+                  onChange={(e) => setContributorLimit(Number(e.target.value))}
+                >
+                  {CONTRIBUTOR_LIMIT_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n === 0 ? 'All' : `Top ${n}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <p className="empty">
               Click a contributor to filter the history below to just their
               events.
@@ -224,7 +280,10 @@ export default function History() {
                   </tr>
                 </thead>
                 <tbody>
-                  {sortedContributors.map((c) => (
+                  {(contributorLimit > 0
+                    ? sortedContributors.slice(0, contributorLimit)
+                    : sortedContributors
+                  ).map((c) => (
                     <tr
                       key={c.username}
                       onClick={() =>
@@ -310,6 +369,7 @@ export default function History() {
                       <td>{e.amount ? e.amount : ''}</td>
                       <td>+{formatDuration(e.secondsAdded)}</td>
                       <td>{e.moneyAdded ? `+$${formatMoney(e.moneyAdded)}` : ''}</td>
+                      <td>{e.addedBy ?? ''}</td>
                     </tr>
                   ))}
                 </tbody>

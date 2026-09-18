@@ -29,18 +29,25 @@ func NewTwitch(clientID, clientSecret, redirectURL string) *Provider {
 		//
 		// user:read:chat/user:bot back reading a channel's chat for
 		// "!timer pause"/"!timer play"/"!timer lock"/"!timer unlock"/
-		// "!timer hide"/"!timer show" commands (see
+		// "!timer hide"/"!timer show"/"!timer hh" commands (see
 		// twitch.Client.EnsureChatCommandSubscription) — unlike the scopes
 		// above, Twitch does honor moderator status for this one (or
 		// broadcaster status on one's own channel), no broadcaster-only
 		// restriction.
+		//
+		// moderator:manage:announcements backs "!timer hh <duration>"
+		// specifically (see twitch.Client.SendChatAnnouncement and
+		// internal/server/twitch_webhook.go's announceTimeBoost), which
+		// posts its "time is doubled" notice as the timer owner's own
+		// Twitch account — same broadcaster-or-moderator bar as
+		// user:read:chat/user:bot above.
 		//
 		// Accounts that linked Twitch before any of these were added here
 		// won't have granted them; the affected calls fail (logged, not
 		// fatal) until they reconnect their Twitch account.
 		Scopes: []string{
 			"channel:read:subscriptions", "bits:read", "user:read:moderated_channels",
-			"user:read:chat", "user:bot",
+			"user:read:chat", "user:bot", "moderator:manage:announcements",
 		},
 		ExtraUserInfoHeaders: map[string]string{"Client-Id": clientID},
 		ParseUser:            parseTwitchUser,

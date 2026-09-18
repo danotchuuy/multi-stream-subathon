@@ -62,6 +62,11 @@ type TimerRecord struct {
 	// Ended is toggled from the dashboard only — see Timer.SetEnded.
 	Ended bool
 
+	// BoostEndsAt is when a "!timer hh <duration>" time-doubling boost
+	// (see Timer.StartTimeBoost) expires; the zero value means none is
+	// active.
+	BoostEndsAt time.Time
+
 	// OverlayTimerBg/OverlayTimerText/OverlayMoneyBg/OverlayMoneyText/
 	// OverlayGoalBg/OverlayGoalText/OverlayGoalAmountBg/
 	// OverlayGoalAmountText are hex colors customizing the public

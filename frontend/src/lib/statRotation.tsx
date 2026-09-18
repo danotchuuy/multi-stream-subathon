@@ -295,7 +295,7 @@ export const STAT_CATEGORIES: {
   countPrefix?: string
 }[] = [
   { key: 'subsGiven', iconKey: 'subs', colorKey: 'subsColor', label: 'Subs' },
-  { key: 'bitsGiven', iconKey: 'bits', colorKey: 'bitsColor', label: 'Bits/Kicks' },
+  { key: 'bitsGiven', iconKey: 'bits', colorKey: 'bitsColor', label: 'Bits/Kicks/Gems' },
   {
     key: 'donationsGiven',
     iconKey: 'donations',

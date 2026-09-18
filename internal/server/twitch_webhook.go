@@ -1,11 +1,14 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/danotchuuy/multi-stream-subathon/internal/auth"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/twitch"
@@ -291,14 +294,15 @@ func handleTwitchNotification(deps Deps, messageID string, body []byte) {
 
 // handleTwitchChatCommand parses a channel.chat.message notification for a
 // recognized "!timer pause"/"!timer play"/"!timer lock"/
-// "!timer unlock"/"!timer hide"/"!timer show" command from that
-// channel's own moderator/broadcaster (see twitch.ParseChatCommand — the
-// permission check happens there, off the message's own badge data) and
-// applies it to every timer watching that channel, running or not (unlike
-// contribution events, "!timer play" specifically needs to reach a
-// *stopped* timer) — but never an *ended* one: Manager.TimersByTwitchChannel
-// already excludes those, which is what makes "!timer ..." stop working
-// once a timer's ended (see subathon.Timer.SetEnded).
+// "!timer unlock"/"!timer hide"/"!timer show"/"!timer hh <duration>"
+// command from that channel's own moderator/broadcaster (see
+// twitch.ParseChatCommand — the permission check happens there, off the
+// message's own badge data) and applies it to every timer watching that
+// channel, running or not (unlike contribution events, "!timer play"
+// specifically needs to reach a *stopped* timer) — but never an *ended*
+// one: Manager.TimersByTwitchChannel already excludes those, which is what
+// makes "!timer ..." stop working once a timer's ended (see
+// subathon.Timer.SetEnded).
 func handleTwitchChatCommand(deps Deps, body []byte) {
 	cmd, ok, err := twitch.ParseChatCommand(body)
 	if err != nil {
@@ -310,6 +314,10 @@ func handleTwitchChatCommand(deps Deps, body []byte) {
 	}
 
 	for _, t := range deps.Manager.TimersByTwitchChannel(cmd.BroadcasterUserID) {
+		if cmd.Name == "hh" {
+			handleHHCommand(deps, t, cmd)
+			continue
+		}
 		if err := applyChatCommand(t, cmd.Name); err != nil {
 			log.Printf("twitch: run !%s (from %s) on timer %s: %v", cmd.Name, cmd.Username, t.ID(), err)
 			continue
@@ -318,8 +326,10 @@ func handleTwitchChatCommand(deps Deps, body []byte) {
 	}
 }
 
-// applyChatCommand runs one of chatCommandNames against t. Unknown names
-// (shouldn't happen — ParseChatCommand already filters them) are a no-op.
+// applyChatCommand runs one of chatCommandNames' bare toggles against t —
+// every command except "hh" (see handleHHCommand, which needs deps to send
+// its chat announcement, not just the timer). Unknown names (shouldn't
+// happen — ParseChatCommand already filters them) are a no-op.
 func applyChatCommand(t *subathon.Timer, name string) error {
 	switch name {
 	case "pause":
@@ -337,4 +347,171 @@ func applyChatCommand(t *subathon.Timer, name string) error {
 	default:
 		return nil
 	}
+}
+
+// maxHHDuration caps how long a single "!timer hh <duration>" command can
+// double contributions for, e.g. against a typo like "!timer hh 300h".
+const maxHHDuration = 24 * time.Hour
+
+// handleHHCommand implements "!timer hh <duration>" (e.g. "!timer hh
+// 30m") — parses the duration and hands off to startHappyHour, the same
+// entry point the dashboard's "Start Happy Hour" control uses (see
+// handleStartHappyHour), just reached from chat instead of an HTTP request.
+func handleHHCommand(deps Deps, t *subathon.Timer, cmd twitch.ChatCommand) {
+	d, err := time.ParseDuration(cmd.Arg)
+	if err != nil || d <= 0 {
+		log.Printf("twitch: !timer hh (from %s) on timer %s: invalid duration %q", cmd.Username, t.ID(), cmd.Arg)
+		return
+	}
+
+	if err := startHappyHour(deps, t, cmd.BroadcasterUserID, d); err != nil {
+		log.Printf("twitch: start time boost (from %s) on timer %s: %v", cmd.Username, t.ID(), err)
+	}
+}
+
+// startHappyHour starts a time-doubling boost on t (see subathon.Timer.
+// StartTimeBoost, capped at maxHHDuration), announces it in
+// broadcasterID's chat using the timer owner's own Twitch account (see
+// announceAsOwner), and schedules a matching "it's over" announcement for
+// when it expires (see announceTimeBoostEnd) — shared by the "!timer hh
+// <duration>" chat command (handleHHCommand) and the dashboard's "Start
+// Happy Hour" control (handleStartHappyHour). broadcasterID empty (e.g. the
+// timer has no Twitch channel configured) skips both announcements but
+// still starts the boost itself.
+func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.Duration) error {
+	if d > maxHHDuration {
+		d = maxHHDuration
+	}
+
+	if err := t.StartTimeBoost(d); err != nil {
+		return fmt.Errorf("start time boost: %w", err)
+	}
+	endsAt := t.TimeBoostEndsAt()
+	deps.Hub.Broadcast(t.ID(), t.Snapshot())
+
+	if broadcasterID == "" {
+		return nil
+	}
+
+	minutes := int(d.Round(time.Minute) / time.Minute)
+	startMessage := fmt.Sprintf("⏱️ Happy Hour! Time contributions are DOUBLED for the next %d minutes!", minutes)
+	if err := announceAsOwner(deps, t, broadcasterID, startMessage); err != nil {
+		log.Printf("twitch: announce time boost start on timer %s: %v", t.ID(), err)
+	}
+
+	// This server process is what's tracking the expiry, so the
+	// announcement is scheduled here rather than resumed on restart — a
+	// boost still active in the database when the server restarts won't
+	// get its "it's over" announcement, same best-effort, in-memory-only
+	// treatment as e.g. oauth.StateStore's in-flight flows.
+	time.AfterFunc(d, func() { announceTimeBoostEnd(deps, t, broadcasterID, endsAt) })
+	return nil
+}
+
+type startHappyHourRequest struct {
+	// DurationSeconds is how long to double time contributions for, e.g.
+	// 1800 for 30 minutes.
+	DurationSeconds int `json:"durationSeconds"`
+}
+
+// handleStartHappyHour is the dashboard's "Start Happy Hour" control —
+// startHappyHour reached over HTTP instead of a "!timer hh <duration>"
+// chat command, for a streamer/moderator who'd rather click a button than
+// type in chat. Announces on this timer's configured Twitch channel (see
+// Timer.SetTwitchChannel), if any; a timer with no Twitch channel
+// configured still gets the boost, just with no chat announcement.
+func handleStartHappyHour(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req startHappyHourRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		if req.DurationSeconds <= 0 {
+			http.Error(w, "durationSeconds must be positive", http.StatusBadRequest)
+			return
+		}
+
+		broadcasterID, _ := t.TwitchChannel()
+		if err := startHappyHour(deps, t, broadcasterID, time.Duration(req.DurationSeconds)*time.Second); err != nil {
+			log.Printf("server: start happy hour for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to start happy hour", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+// announceTimeBoostEnd announces that a "!timer hh" boost has ended, but
+// only if expectedEndsAt still matches t's current boost expiry (see
+// Timer.TimeBoostEndsAt) — a later "!timer hh" command before this one's
+// timer fired would have moved that expiry forward, meaning *that*
+// command's own scheduled call (not this stale one) owns announcing the
+// real end.
+func announceTimeBoostEnd(deps Deps, t *subathon.Timer, broadcasterID string, expectedEndsAt time.Time) {
+	if !t.TimeBoostEndsAt().Equal(expectedEndsAt) {
+		return
+	}
+
+	deps.Hub.Broadcast(t.ID(), t.Snapshot())
+
+	message := "⏱️ Happy Hour has ended — time contributions are back to normal."
+	if err := announceAsOwner(deps, t, broadcasterID, message); err != nil {
+		log.Printf("twitch: announce time boost end on timer %s: %v", t.ID(), err)
+	}
+}
+
+// tokenRefreshMargin refreshes an about-to-expire Twitch access token this
+// early rather than racing its exact expiry — same margin youtube.Poller
+// uses for the same reason.
+const tokenRefreshMargin = time.Minute
+
+// announceAsOwner posts a chat announcement to broadcasterID's channel
+// (via twitch.Client.SendChatAnnouncement) using t's owner's own linked
+// Twitch identity — "the streamer's account" a "!timer hh" command's
+// start/end announcements should post as (see handleHHCommand/
+// announceTimeBoostEnd) — refreshing that identity's access token first
+// if it's expired or about to be (see oauth.Provider.Refresh, same
+// pattern as youtube.Poller.run). A no-op if Twitch integration is
+// disabled or the owner has no linked Twitch identity.
+func announceAsOwner(deps Deps, t *subathon.Timer, broadcasterID, message string) error {
+	if deps.Twitch == nil {
+		return nil
+	}
+
+	identities, err := deps.Auth.Identities(t.UserID())
+	if err != nil {
+		return fmt.Errorf("list identities for timer %s owner: %w", t.ID(), err)
+	}
+	var ident *auth.Identity
+	for i := range identities {
+		if identities[i].Platform == auth.PlatformTwitch {
+			ident = &identities[i]
+			break
+		}
+	}
+	if ident == nil {
+		return fmt.Errorf("timer %s owner has no linked Twitch identity to announce as", t.ID())
+	}
+
+	token := ident.AccessToken
+	if !ident.TokenExpiresAt.IsZero() && time.Now().After(ident.TokenExpiresAt.Add(-tokenRefreshMargin)) {
+		provider := deps.OAuthProviders["twitch"]
+		if provider == nil {
+			return fmt.Errorf("twitch oauth provider not configured")
+		}
+		newToken, newRefreshToken, newExpiresAt, err := provider.Refresh(context.Background(), ident.RefreshToken)
+		if err != nil {
+			return fmt.Errorf("refresh twitch token for %s: %w", ident.PlatformUsername, err)
+		}
+		if err := deps.Auth.RefreshIdentityTokens(ident.ID, newToken, newRefreshToken, newExpiresAt); err != nil {
+			log.Printf("twitch: save refreshed token for %s: %v", ident.PlatformUsername, err)
+		}
+		token = newToken
+	}
+
+	return deps.Twitch.SendChatAnnouncement(broadcasterID, ident.PlatformUserID, token, message)
 }

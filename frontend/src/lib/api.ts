@@ -164,6 +164,22 @@ export function unendSubathon(timerId: string): Promise<Snapshot> {
   return request(`/api/timers/${timerId}/control/unend`, { method: 'POST' })
 }
 
+/** Starts a "Happy Hour": doubles time contributions for durationSeconds —
+ * the dashboard's equivalent of a channel moderator's "!timer hh
+ * <duration>" chat command. Announced on this timer's configured Twitch
+ * channel (if any) using its owner's own Twitch account; a timer with no
+ * Twitch channel configured still gets the boost, just with no chat
+ * announcement. */
+export function startHappyHour(
+  timerId: string,
+  durationSeconds: number,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/control/happy-hour`, {
+    method: 'POST',
+    body: JSON.stringify({ durationSeconds }),
+  })
+}
+
 /** GET a timer's reward rules (seconds per contribution, by item and
  * platform), with defaults filled in for anything unconfigured. */
 export function getRewardRules(timerId: string): Promise<RewardRules> {

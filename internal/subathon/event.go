@@ -26,6 +26,7 @@ const (
 	EventGiftedSub EventType = "gifted_sub"
 	EventDonation  EventType = "donation"
 	EventBits      EventType = "bits"
+	EventGems      EventType = "gems"
 	EventManual    EventType = "manual"
 )
 
@@ -45,6 +46,9 @@ type Event struct {
 	MoneyAdded float64   `json:"moneyAdded,omitempty"`
 	Amount     float64   `json:"amount,omitempty"` // e.g. donation amount or bits count
 	Occurred   time.Time `json:"occurred"`
+	// AddedBy is the display name of the dashboard user who entered this
+	// event by hand; empty for events that arrived from a platform.
+	AddedBy string `json:"addedBy,omitempty"`
 }
 
 // NormalizeUsername canonicalizes a contributor's username so the same

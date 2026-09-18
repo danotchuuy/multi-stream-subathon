@@ -50,6 +50,7 @@ const (
 	helixURL                  = "https://api.twitch.tv/helix/eventsub/subscriptions"
 	helixUsersURL             = "https://api.twitch.tv/helix/users"
 	helixModeratedChannelsURL = "https://api.twitch.tv/helix/moderation/channels"
+	helixChatAnnouncementsURL = "https://api.twitch.tv/helix/chat/announcements"
 	transport                 = "webhook"
 )
 
@@ -399,6 +400,43 @@ func (c *Client) ModeratedChannels(userAccessToken, userID string) ([]ModeratedC
 	return channels, nil
 }
 
+// SendChatAnnouncement posts a chat announcement (a highlighted system-style
+// message) to broadcasterID's channel, sent as moderatorID using
+// accessToken — a user access token belonging to moderatorID, who must be
+// broadcasterID's own broadcaster or one of their moderators and must have
+// granted this app moderator:manage:announcements (see oauth.NewTwitch).
+// Used for the "!timer hh <duration>" chat command (see
+// internal/server/twitch_webhook.go's announceTimeBoost), sent as the
+// timer owner's own linked Twitch identity so it reads as coming from the
+// streamer/moderator rather than this app's own bot.
+func (c *Client) SendChatAnnouncement(broadcasterID, moderatorID, accessToken, message string) error {
+	body, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return fmt.Errorf("marshal chat announcement: %w", err)
+	}
+
+	q := url.Values{"broadcaster_id": {broadcasterID}, "moderator_id": {moderatorID}}
+	req, err := http.NewRequest(http.MethodPost, helixChatAnnouncementsURL+"?"+q.Encode(), bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build chat announcement request: %w", err)
+	}
+	req.Header.Set("Client-Id", c.cfg.ClientID)
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.hc.Do(req)
+	if err != nil {
+		return fmt.Errorf("chat announcement request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNoContent {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("chat announcement failed (%d): %s", resp.StatusCode, respBody)
+	}
+	return nil
+}
+
 // VerifyMessage checks an incoming webhook request's HMAC signature against
 // WebhookSecret, per Twitch's EventSub signing scheme.
 func (c *Client) VerifyMessage(header http.Header, body []byte) bool {
@@ -632,7 +670,9 @@ func giftedTierToItem(tier string) subathon.RewardItem {
 // command when it follows a "!timer " prefix, e.g. "!timer play".
 // Deliberately has no "end"/"unend" entry — ending a timer (see
 // subathon.Timer.SetEnded) is dashboard-only, precisely so it can't be
-// triggered (or, worse, undone) by anyone with chat access.
+// triggered (or, worse, undone) by anyone with chat access. "hh" ("Happy
+// Hour") is the only one that takes an argument — a duration like "30m",
+// carried in ChatCommand.Arg — the rest are bare toggles.
 var chatCommandNames = map[string]bool{
 	"pause":  true,
 	"play":   true,
@@ -640,6 +680,7 @@ var chatCommandNames = map[string]bool{
 	"unlock": true,
 	"hide":   true,
 	"show":   true,
+	"hh":     true,
 }
 
 // chatCommandPrefix is the first word a chat message must start with
@@ -656,6 +697,9 @@ type ChatCommand struct {
 	Username          string
 	// Name is one of chatCommandNames' keys, e.g. "pause" (no "!timer").
 	Name string
+	// Arg is whatever followed Name, e.g. "30m" for "!timer hh 30m".
+	// Empty for every command except "hh".
+	Arg string
 }
 
 // ParseChatCommand decodes a channel.chat.message notification body and,
@@ -709,5 +753,6 @@ func ParseChatCommand(body []byte) (cmd ChatCommand, ok bool, err error) {
 		BroadcasterUserID: e.BroadcasterUserID,
 		Username:          e.ChatterUserName,
 		Name:              name,
+		Arg:               strings.Join(fields[2:], " "),
 	}, true, nil
 }

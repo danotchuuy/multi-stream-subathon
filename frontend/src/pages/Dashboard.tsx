@@ -26,6 +26,7 @@ import {
   setMoneyRaised,
   setTwitchChannel,
   setYouTubeChannel,
+  startHappyHour,
   stopSubathon,
   streamElementsOAuthStartUrl,
   unendSubathon,
@@ -322,7 +323,7 @@ function MilestonesList({
 /** What kind of contribution AddDonationForm is recording — matches
  * EventType, minus 'manual' (that's the raw "Add test event" tool
  * below). */
-type DonationKind = 'sub' | 'gifted_sub' | 'bits' | 'donation'
+type DonationKind = 'sub' | 'gifted_sub' | 'bits' | 'gems' | 'donation'
 
 /** Which DonationKinds are offered per platform in AddDonationForm's
  * "What was contributed" dropdown — StreamElements/Throne aren't listed
@@ -339,7 +340,7 @@ const DONATION_KINDS: Record<
 > = {
   twitch: ['sub', 'gifted_sub', 'bits'],
   kick: ['sub', 'gifted_sub', 'bits'],
-  youtube: ['donation', 'sub', 'gifted_sub'],
+  youtube: ['donation', 'sub', 'gifted_sub', 'gems'],
 }
 
 const DONATION_KIND_LABELS: Record<DonationKind, string> = {
@@ -347,6 +348,7 @@ const DONATION_KIND_LABELS: Record<DonationKind, string> = {
   sub: 'Sub',
   gifted_sub: 'Gifted subs',
   bits: 'Bits / Kicks',
+  gems: 'Gems',
 }
 
 /** The RewardItem/MoneyRules row a given kind/platform/tier combination
@@ -379,6 +381,8 @@ function donationRewardItem(
           : 'gifted_tier3_sub'
     case 'bits':
       return 'bits_100'
+    case 'gems':
+      return 'gems_100'
     case 'donation':
       return 'donation_unit'
   }
@@ -426,7 +430,7 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   const showTier = platform === 'twitch' && (kind === 'sub' || kind === 'gifted_sub')
   const secondsPerUnit = rewardRules?.[item][platform] ?? 0
   const moneyPerUnit = moneyRules?.[item][platform] ?? 0
-  // Bits/Kicks are priced per 100 (see RewardBits100); everything else is
+  // Bits/Kicks/Gems are priced per 100 (see RewardBits100); everything else is
   // priced per unit directly — same split as twitch.ParsedEvent.Seconds/
   // Money. Rounded either way: count is a whole number for every kind
   // except "donation" (a dollar amount, e.g. 4.33), and secondsAdded
@@ -434,12 +438,13 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   // SecondsAdded field is an int, so a non-whole-dollar tip's raw
   // count * secondsPerUnit (a JS float, e.g. 259.79999999999995) would
   // otherwise fail to decode there as "invalid request body".
+  const per100 = item === 'bits_100' || item === 'gems_100'
   const seconds =
-    item === 'bits_100'
+    per100
       ? Math.ceil((count * secondsPerUnit) / 100)
       : Math.round(count * secondsPerUnit)
   const money =
-    item === 'bits_100'
+    per100
       ? (count * moneyPerUnit) / 100
       : count * moneyPerUnit
 
@@ -448,9 +453,11 @@ function AddDonationForm({ timerId }: { timerId: string }) {
       ? 'Amount donated ($)'
       : kind === 'bits'
         ? 'Bits/Kicks'
-        : kind === 'gifted_sub'
-          ? 'Subs gifted'
-          : 'Number of subs'
+        : kind === 'gems'
+          ? 'Gems'
+          : kind === 'gifted_sub'
+            ? 'Subs gifted'
+            : 'Number of subs'
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -954,6 +961,65 @@ function ModeratorsSection({
   )
 }
 
+/** Returns how many whole seconds remain until isoTime, floored at 0 for
+ * a timestamp already in the past (e.g. a stale snapshot the next
+ * websocket tick hasn't overwritten yet). */
+function secondsUntil(isoTime: string): number {
+  return Math.max(0, (new Date(isoTime).getTime() - Date.now()) / 1000)
+}
+
+/** "Start Happy Hour" control: the dashboard's equivalent of a channel
+ * moderator's "!timer hh <duration>" chat command — doubles time
+ * contributions for a chosen duration and announces it in that timer's
+ * Twitch chat using the streamer's own account (see api.startHappyHour).
+ * boostActive/boostEndsAt come straight off the live snapshot, which
+ * ticks every second, so the "ends in ..." countdown here updates on its
+ * own without a separate timer. */
+function HappyHourForm({
+  minutes,
+  onMinutesChange,
+  onStart,
+  busy,
+  boostActive,
+  boostEndsAt,
+}: {
+  minutes: number
+  onMinutesChange: (minutes: number) => void
+  onStart: () => Promise<void>
+  busy: boolean
+  boostActive: boolean
+  boostEndsAt?: string
+}) {
+  return (
+    <div className="control-group control-group-stacked">
+      <div className="control-row">
+        <div className="control-toggle">
+          <span className={`status ${boostActive ? 'status-ok' : ''}`}>
+            {boostActive ? '🔥 Happy Hour active' : 'Happy Hour'}
+          </span>
+          <span className="control-hint">
+            {boostActive && boostEndsAt
+              ? `Time contributions doubled — ends in ${formatDuration(secondsUntil(boostEndsAt))}`
+              : 'Doubles time contributions for a limited window, announced in Twitch chat'}
+          </span>
+        </div>
+        <label>
+          Minutes
+          <input
+            type="number"
+            min={1}
+            value={minutes}
+            onChange={(e) => onMinutesChange(Number(e.target.value))}
+          />
+        </label>
+        <button onClick={onStart} disabled={busy}>
+          Start Happy Hour
+        </button>
+      </div>
+    </div>
+  )
+}
+
 // Options for the "Recent contributors" time-window filter. minutes is 0
 // for "All time" — every other value filters events out once they're
 // older than that many minutes.
@@ -971,6 +1037,7 @@ export default function Dashboard() {
   const { timerId } = useParams<{ timerId: string }>()
   const { snapshot, connected } = useSubathon(timerId)
   const [initialMinutes, setInitialMinutes] = useState(60)
+  const [happyHourMinutes, setHappyHourMinutes] = useState(30)
   const [username, setUsername] = useState('')
   const [secondsAdded, setSecondsAdded] = useState(60)
   const [moneyAdded, setMoneyAdded] = useState(0)
@@ -980,6 +1047,8 @@ export default function Dashboard() {
   const [isOwner, setIsOwner] = useState<boolean | null>(null)
   const [milestones, setMilestones] = useState<MoneyMilestone[]>([])
   const [eventsWindowMinutes, setEventsWindowMinutes] = useState(0)
+  // '' means all platforms.
+  const [eventsPlatform, setEventsPlatform] = useState('')
   const [removingEventId, setRemovingEventId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -1041,6 +1110,22 @@ export default function Dashboard() {
     setError(null)
     try {
       await stopSubathon(timerId)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Starts a "Happy Hour": the dashboard's equivalent of a channel
+  // moderator's "!timer hh <duration>" chat command — doubles time
+  // contributions for happyHourMinutes and announces it on this timer's
+  // configured Twitch channel (if any), using the streamer's own account.
+  const handleStartHappyHour = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await startHappyHour(timerId, happyHourMinutes * 60)
     } catch (err) {
       setError(controlErrorMessage(err))
     } finally {
@@ -1348,6 +1433,15 @@ export default function Dashboard() {
           </div>
         </div>
 
+        <HappyHourForm
+          minutes={happyHourMinutes}
+          onMinutesChange={setHappyHourMinutes}
+          onStart={handleStartHappyHour}
+          busy={busy}
+          boostActive={snapshot?.boostActive ?? false}
+          boostEndsAt={snapshot?.boostEndsAt}
+        />
+
         <AddDonationForm timerId={timerId} />
 
         {snapshot && (
@@ -1380,16 +1474,33 @@ export default function Dashboard() {
               ))}
             </select>
           </label>
+          <label className="events-window">
+            Platform
+            <select
+              value={eventsPlatform}
+              onChange={(e) => setEventsPlatform(e.target.value)}
+            >
+              <option value="">All platforms</option>
+              {[
+                ...new Set((snapshot?.recentEvents ?? []).map((e) => e.platform)),
+              ]
+                .sort()
+                .map((platform) => (
+                  <option key={platform} value={platform}>
+                    {platform}
+                  </option>
+                ))}
+            </select>
+          </label>
         </div>
         {(() => {
           const cutoff =
             eventsWindowMinutes > 0 ? Date.now() - eventsWindowMinutes * 60_000 : null
-          const visibleEvents =
-            cutoff === null
-              ? snapshot?.recentEvents ?? []
-              : (snapshot?.recentEvents ?? []).filter(
-                  (event) => new Date(event.occurred).getTime() >= cutoff,
-                )
+          const visibleEvents = (snapshot?.recentEvents ?? []).filter(
+            (event) =>
+              (cutoff === null || new Date(event.occurred).getTime() >= cutoff) &&
+              (eventsPlatform === '' || event.platform === eventsPlatform),
+          )
 
           return visibleEvents.length > 0 ? (
             <ul>
@@ -1399,11 +1510,16 @@ export default function Dashboard() {
                   <span>{event.username || 'anonymous'}</span>
                   <span>
                     {event.type}
-                    {event.type === 'gifted_sub' && event.amount ? ` x${event.amount}` : ''}
+                    {event.amount && event.type !== 'donation' && event.type !== 'manual'
+                      ? ` x${event.amount}`
+                      : ''}
                   </span>
                   <span>+{formatDuration(event.secondsAdded)}</span>
                   {event.moneyAdded ? (
                     <span>+${formatMoney(event.moneyAdded)}</span>
+                  ) : null}
+                  {event.addedBy ? (
+                    <span className="added-by">added by {event.addedBy}</span>
                   ) : null}
                   <button
                     type="button"
@@ -1420,7 +1536,7 @@ export default function Dashboard() {
           ) : (
             <p className="empty">
               {snapshot && snapshot.recentEvents.length > 0
-                ? 'No events in this time window.'
+                ? 'No events match these filters.'
                 : 'No events yet.'}
             </p>
           )

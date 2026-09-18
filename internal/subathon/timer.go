@@ -288,6 +288,13 @@ type Snapshot struct {
 	// dashboard, never chat.
 	Ended bool `json:"ended"`
 
+	// BoostActive/BoostEndsAt reflect a "!timer hh <duration>"/dashboard
+	// "Start Happy Hour" time-doubling boost (see Timer.StartTimeBoost) —
+	// BoostActive is false (and BoostEndsAt the zero value, omitted) once
+	// it's expired, not just while none has ever been started.
+	BoostActive bool      `json:"boostActive"`
+	BoostEndsAt time.Time `json:"boostEndsAt,omitempty"`
+
 	// OverlayColors customizes the public overlay's timer/money-goal pill
 	// colors — always populated (DefaultOverlayColors until customized),
 	// never the zero value.
@@ -357,6 +364,12 @@ type Timer struct {
 	// events and no longer responds to any "!timer ..." chat command —
 	// see SetEnded. Dashboard-only: there is no chat command for it.
 	ended bool
+
+	// boostEndsAt is when a "!timer hh <duration>" time-doubling boost
+	// expires — the zero value (or a time already in the past) means none
+	// is active. While active, AddEvent doubles SecondsAdded for every
+	// non-manual event (see StartTimeBoost/TimeBoostActive).
+	boostEndsAt time.Time
 
 	// totalMoneyRaised/moneyGoal mirror totalAdded/the clock, but for
 	// money: totalMoneyRaised accumulates every event's MoneyAdded;
@@ -449,6 +462,7 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		locked:                       rec.Locked,
 		hidden:                       rec.Hidden,
 		ended:                        rec.Ended,
+		boostEndsAt:                  rec.BoostEndsAt,
 		totalMoneyRaised:             rec.TotalMoneyRaised,
 		moneyGoal:                    rec.MoneyGoal,
 		twitchBroadcasterID:          rec.TwitchBroadcasterID,
@@ -816,6 +830,49 @@ func (t *Timer) SetEnded(ended bool) error {
 	return t.persistLocked()
 }
 
+// TimeBoostEndsAt returns the raw expiry StartTimeBoost last set,
+// regardless of whether it's already in the past — unlike TimeBoostActive,
+// which reports false (and a zero time) once expired. Used to detect
+// whether a boost has been replaced by a newer one before a scheduled
+// "it just ended" announcement fires for the original (see
+// internal/server/twitch_webhook.go's announceTimeBoostEnd), where "no
+// boost has ever started" and "expired" need to compare unequal to
+// whatever specific expiry that announcement was scheduled against.
+func (t *Timer) TimeBoostEndsAt() time.Time {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.boostEndsAt
+}
+
+// TimeBoostActive reports whether a "!timer hh <duration>" time-doubling
+// boost (see StartTimeBoost) is currently active, and if so, when it ends.
+func (t *Timer) TimeBoostActive() (active bool, endsAt time.Time) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	if t.boostEndsAt.IsZero() || !time.Now().Before(t.boostEndsAt) {
+		return false, time.Time{}
+	}
+	return true, t.boostEndsAt
+}
+
+// StartTimeBoost begins (or extends/replaces) a time-doubling boost that
+// lasts for d: every non-manual contribution AddEvent records while it's
+// active has its SecondsAdded doubled before it's applied to the clock and
+// recorded to history (see AddEvent) — triggered by a channel moderator or
+// the streamer's own "!timer hh <duration>" chat command (see
+// twitch.chatCommandNames and internal/server/twitch_webhook.go's
+// handleHHCommand), never by an ordinary viewer. Passing a shorter d than
+// an already-active boost's remaining time still shortens it — this
+// always sets the expiry outright rather than only ever extending it.
+func (t *Timer) StartTimeBoost(d time.Duration) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.boostEndsAt = time.Now().Add(d)
+	return t.persistLocked()
+}
+
 // OverlayColors returns this timer's configured overlay pill colors, with
 // DefaultOverlayColors filled in for anything unset.
 func (t *Timer) OverlayColors() OverlayColors {
@@ -912,7 +969,7 @@ func (t *Timer) SetPanelColors(colors PanelColors) error {
 // per event, since EventType already partitions every real contribution
 // into exactly one of these three "gift categories" (EventManual test
 // events, which don't represent a real contribution kind, add to none).
-// Subs/resubs/gifted subs and bits/Kicks sum e.Amount (the number of
+// Subs/resubs/gifted subs and bits/Kicks/gems sum e.Amount (the number of
 // subs gifted, or the number of bits/Kicks) so e.g. a single 5-sub gift
 // or 500-bit cheer counts as 5/500, not 1 — falling back to 1 if Amount
 // wasn't set. Donations count events instead of summing Amount, since
@@ -922,7 +979,7 @@ func contributionCounts(e Event) (subs, bits, donations int) {
 	switch e.Type {
 	case EventSub, EventResub, EventGiftedSub:
 		return amountOrOne(e.Amount), 0, 0
-	case EventBits:
+	case EventBits, EventGems:
 		return 0, amountOrOne(e.Amount), 0
 	case EventDonation:
 		return 0, 0, 1
@@ -953,6 +1010,14 @@ func (t *Timer) AddEvent(e Event) error {
 	e.Username = NormalizeUsername(e.Username)
 	if e.Occurred.IsZero() {
 		e.Occurred = time.Now()
+	}
+
+	// A "!timer hh <duration>" boost (see StartTimeBoost) doubles every
+	// real contribution's time value while active — EventManual is
+	// excluded since it's the dashboard's raw "Add test event" tool, not
+	// an actual tracked reward item (see rewards.go's RewardItems).
+	if e.Type != EventManual && e.SecondsAdded > 0 && !t.boostEndsAt.IsZero() && time.Now().Before(t.boostEndsAt) {
+		e.SecondsAdded *= 2
 	}
 
 	if !t.locked {
@@ -1156,6 +1221,12 @@ func (t *Timer) Snapshot() Snapshot {
 		endsAt = time.Time{}
 	}
 
+	boostActive := !t.boostEndsAt.IsZero() && time.Now().Before(t.boostEndsAt)
+	boostEndsAt := time.Time{}
+	if boostActive {
+		boostEndsAt = t.boostEndsAt
+	}
+
 	events := make([]Event, len(t.events))
 	copy(events, t.events)
 
@@ -1177,6 +1248,8 @@ func (t *Timer) Snapshot() Snapshot {
 		Locked:               t.locked,
 		Hidden:               t.hidden,
 		Ended:                t.ended,
+		BoostActive:          boostActive,
+		BoostEndsAt:          boostEndsAt,
 		OverlayColors:        t.overlayColors,
 		SubsGiven:            t.subsGiven,
 		BitsGiven:            t.bitsGiven,
@@ -1208,6 +1281,7 @@ func (t *Timer) persistLocked() error {
 		Locked:                       t.locked,
 		Hidden:                       t.hidden,
 		Ended:                        t.ended,
+		BoostEndsAt:                  t.boostEndsAt,
 		TwitchBroadcasterID:          t.twitchBroadcasterID,
 		TwitchBroadcasterUsername:    t.twitchBroadcasterUsername,
 		KickBroadcasterID:            t.kickBroadcasterID,

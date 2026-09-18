@@ -28,12 +28,18 @@ const PLATFORM_LABELS: Record<RewardPlatform, string> = {
  * gifted subs are tiered the same way regular subs are (see
  * twitch.giftedTierToItem), so the tiered gifted rows are Twitch-only and
  * the flat "Gifted sub" row is for Kick/YouTube instead. Bits/Kicks are
- * a Twitch/Kick-only cash-equivalent action — YouTube has no such thing
- * (see RewardBits100's own doc comment, which only ever mentions
- * Twitch/Kick) — so that row is Twitch/Kick-only too. StreamElements and
+ * a Twitch/Kick-only cash-equivalent action, so that row is Twitch/Kick-only
+ * too; YouTube's equivalent is Gems (RewardGems100). StreamElements and
  * Throne only ever fire a donation (see the streamelements poller and
  * internal/server/throne_webhook.go), so it's donation-only here too. */
-const ITEMS: { key: RewardItem; label: string; platforms: RewardPlatform[] }[] = [
+const ITEMS: {
+  key: RewardItem
+  label: string
+  platforms: RewardPlatform[]
+  /** Platforms whose cell edits a different underlying RewardItem than
+   * key — e.g. YouTube's Gems share the bits/Kicks row. */
+  cellItems?: Partial<Record<RewardPlatform, RewardItem>>
+}[] = [
   { key: 'tier1_sub', label: 'Tier 1 sub', platforms: ['twitch', 'kick', 'youtube'] },
   { key: 'tier2_sub', label: 'Tier 2 sub', platforms: ['twitch'] },
   { key: 'tier3_sub', label: 'Tier 3 sub', platforms: ['twitch'] },
@@ -41,7 +47,12 @@ const ITEMS: { key: RewardItem; label: string; platforms: RewardPlatform[] }[] =
   { key: 'gifted_tier2_sub', label: 'Gifted tier 2 sub', platforms: ['twitch'] },
   { key: 'gifted_tier3_sub', label: 'Gifted tier 3 sub', platforms: ['twitch'] },
   { key: 'gifted_sub', label: 'Gifted sub', platforms: ['kick', 'youtube'] },
-  { key: 'bits_100', label: 'Bits / Kicks (per 100)', platforms: ['twitch', 'kick'] },
+  {
+    key: 'bits_100',
+    label: 'Bits / Kicks / Gems (per 100)',
+    platforms: ['twitch', 'kick', 'youtube'],
+    cellItems: { youtube: 'gems_100' },
+  },
   {
     key: 'donation_unit',
     label: 'Donation (per $1)',
@@ -133,26 +144,27 @@ function RulesGrid({
             </tr>
           </thead>
           <tbody>
-            {ITEMS.map(({ key, label, platforms }) => (
+            {ITEMS.map(({ key, label, platforms, cellItems }) => (
               <tr key={key}>
                 <th scope="row">{label}</th>
-                {PLATFORMS.map((p) =>
-                  platforms.includes(p) ? (
+                {PLATFORMS.map((p) => {
+                  const cellKey = cellItems?.[p] ?? key
+                  return platforms.includes(p) ? (
                     <td key={p}>
                       <input
                         type="number"
                         min={0}
                         step={step}
-                        value={rules[key]?.[p] ?? 0}
-                        onChange={(e) => handleChange(key, p, e.target.value)}
+                        value={rules[cellKey]?.[p] ?? 0}
+                        onChange={(e) => handleChange(cellKey, p, e.target.value)}
                       />
                     </td>
                   ) : (
                     <td key={p} className="reward-table-na">
                       &mdash;
                     </td>
-                  ),
-                )}
+                  )
+                })}
               </tr>
             ))}
           </tbody>

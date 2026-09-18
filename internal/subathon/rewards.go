@@ -18,6 +18,7 @@ const (
 	RewardGiftedTier3Sub RewardItem = "gifted_tier3_sub"
 	RewardBits100        RewardItem = "bits_100"      // per 100 bits (Twitch) / Kicks (Kick)
 	RewardDonation       RewardItem = "donation_unit" // per $1 donated/Super Chat'd
+	RewardGems100        RewardItem = "gems_100"      // per 100 gems (YouTube)
 )
 
 // RewardItems is every reward item, in display order.
@@ -30,6 +31,7 @@ var RewardItems = []RewardItem{
 	RewardGiftedTier2Sub,
 	RewardGiftedTier3Sub,
 	RewardBits100,
+	RewardGems100,
 	RewardDonation,
 }
 
@@ -60,6 +62,7 @@ func DefaultRewardRules() RewardRules {
 		RewardGiftedTier2Sub: 600,
 		RewardGiftedTier3Sub: 1500,
 		RewardBits100:        60,
+		RewardGems100:        60,
 		RewardDonation:       60,
 	}
 
