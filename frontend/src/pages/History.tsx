@@ -213,23 +213,6 @@ export default function History() {
 
       {error && <p className="error-message">{error}</p>}
 
-      {events && events.length > 0 && (
-        <label className="events-window">
-          Platform
-          <select
-            value={platformFilter}
-            onChange={(e) => setPlatformFilter(e.target.value)}
-          >
-            <option value="">All platforms</option>
-            {platforms.map((platform) => (
-              <option key={platform} value={platform}>
-                {platform}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-
       {!events ? (
         <p className="empty">Loading…</p>
       ) : events.length === 0 ? (
@@ -306,11 +289,27 @@ export default function History() {
           </section>
 
           <section className="events">
-            <h2>
-              {selected
-                ? `${selected}'s contributions`
-                : 'All contributions'}
-            </h2>
+            <div className="events-header">
+              <h2>
+                {selected
+                  ? `${selected}'s contributions`
+                  : 'All contributions'}
+              </h2>
+              <label className="events-window">
+                Platform
+                <select
+                  value={platformFilter}
+                  onChange={(e) => setPlatformFilter(e.target.value)}
+                >
+                  <option value="">All platforms</option>
+                  {platforms.map((platform) => (
+                    <option key={platform} value={platform}>
+                      {platform}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             {selected && selectedTotal && (
               <p className="empty">
                 {selectedTotal.events} event
