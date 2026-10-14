@@ -10,6 +10,7 @@ import {
   setContributionCounts,
   setExplosion,
   setExplosionColor,
+  setHappyHourStyle,
   setOverlayColors,
   setPanelColors,
   setStatIcons,
@@ -19,6 +20,7 @@ import {
 import { formatCompactCount, formatDuration, formatWholeMoney } from '../lib/format'
 import { ALERT_SOUND_OPTIONS, DEFAULT_ALERT_SOUND, playAlertSound } from '../lib/alertSound'
 import { explosionColorStyle, ExplosionBurst } from '../lib/explosion'
+import { HAPPY_HOUR_ANIMATION_STYLES, HappyHourWrap } from '../lib/happyHour'
 import {
   CategoryIcon,
   DEFAULT_ICON_VALUES,
@@ -29,6 +31,8 @@ import {
   SVG_ICON_OPTIONS,
 } from '../lib/statRotation'
 import type {
+  HappyHourAnimationStyle,
+  HappyHourStyle,
   Leaderboard,
   MilestoneAlert,
   MoneyMilestone,
@@ -512,6 +516,100 @@ function ExplosionColorForm({
   )
 }
 
+/** Edits the main overlay's happy hour animation (see
+ * Snapshot.happyHourStyle). style/onChange are controlled by the parent,
+ * same lifted-state pattern as ExplosionColorForm, so the "Preview happy
+ * hour" button reflects an edit immediately, even before it's saved. */
+function HappyHourStyleForm({
+  style,
+  onChange,
+  onSave,
+}: {
+  style: HappyHourStyle
+  onChange: (style: HappyHourStyle) => void
+  onSave: () => Promise<unknown>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const update = (patch: Partial<HappyHourStyle>) => {
+    onChange({ ...style, ...patch })
+    setSaved(false)
+  }
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setSaved(false)
+    setError(null)
+    try {
+      await onSave()
+      setSaved(true)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const selected = HAPPY_HOUR_ANIMATION_STYLES.find((s) => s.value === style.style)
+
+  return (
+    <form className="control-group control-group-stacked" onSubmit={handleSubmit}>
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={style.enabled}
+          onChange={(e) => update({ enabled: e.target.checked })}
+        />
+        Animate the timer during a happy hour
+      </label>
+      <div className="control-inline">
+        <label>
+          Animation
+          <select
+            value={style.style}
+            disabled={!style.enabled}
+            onChange={(e) =>
+              update({ style: e.target.value as HappyHourAnimationStyle })
+            }
+          >
+            {HAPPY_HOUR_ANIMATION_STYLES.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Color
+          <input
+            type="color"
+            value={style.color}
+            disabled={!style.enabled || style.style === 'rainbow'}
+            onChange={(e) => update({ color: e.target.value })}
+          />
+        </label>
+      </div>
+      {selected && <span className="control-hint">{selected.description}</span>}
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={style.showBadge}
+          disabled={!style.enabled}
+          onChange={(e) => update({ showBadge: e.target.checked })}
+        />
+        Show a "🔥 2× HAPPY HOUR" badge above the timer (uses the live multiplier)
+      </label>
+      <button type="submit" disabled={busy}>
+        {saved ? 'Saved!' : 'Save happy hour animation'}
+      </button>
+      {error && <p className="error-message">{error}</p>}
+    </form>
+  )
+}
+
 /** A fresh timer's starting point for the countdown alert list below —
  * purely a client-side convenience (same idea as PRESETS for overlay
  * colors): shown once the fetched list comes back empty, so a streamer
@@ -696,6 +794,7 @@ export default function Styling() {
   const [icons, setIcons] = useState<StatIcons | null>(null)
   const [panelColors, setPanelColorsState] = useState<PanelColors | null>(null)
   const [explosionColor, setExplosionColorState] = useState<string | null>(null)
+  const [happyHourStyle, setHappyHourStyleState] = useState<HappyHourStyle | null>(null)
   const [leaderboard, setLeaderboard] = useState<Leaderboard | null>(null)
   const [previewDark, setPreviewDark] = useState(true)
   const [busy, setBusy] = useState(false)
@@ -705,6 +804,7 @@ export default function Styling() {
   const [explosionBusy, setExplosionBusy] = useState(false)
   const [alertSoundsBusy, setAlertSoundsBusy] = useState(false)
   const [previewExploding, setPreviewExploding] = useState(false)
+  const [previewHappyHour, setPreviewHappyHour] = useState(false)
 
   // Seed the editable colors/icons once the timer's actual saved values
   // arrive over the websocket — only the first time, so this doesn't
@@ -723,6 +823,9 @@ export default function Styling() {
   }
   if (snapshot && explosionColor === null) {
     setExplosionColorState(snapshot.explosionColor)
+  }
+  if (snapshot && happyHourStyle === null) {
+    setHappyHourStyleState(snapshot.happyHourStyle)
   }
 
   useEffect(() => {
@@ -833,7 +936,7 @@ export default function Styling() {
 
       {error && <p className="error-message">{error}</p>}
 
-      {colors === null || icons === null || panelColors === null || explosionColor === null ? (
+      {colors === null || icons === null || panelColors === null || explosionColor === null || happyHourStyle === null ? (
         <p className="empty">Loading…</p>
       ) : (
         <>
@@ -854,6 +957,12 @@ export default function Styling() {
               >
                 {previewExploding ? 'Stop explosion preview' : 'Preview explosion'}
               </button>
+              <button
+                type="button"
+                onClick={() => setPreviewHappyHour((prev) => !prev)}
+              >
+                {previewHappyHour ? 'Stop happy hour preview' : 'Preview happy hour'}
+              </button>
             </div>
             <div
               className={
@@ -862,59 +971,68 @@ export default function Styling() {
                   : 'styling-preview-canvas styling-preview-canvas-light'
               }
             >
-              <div
-                className={previewExploding ? 'overlay-explosion-wrap' : undefined}
-                style={previewExploding ? explosionColorStyle(explosionColor) : undefined}
+              <HappyHourWrap
+                // Previews the in-progress (possibly unsaved) style even
+                // while it's disabled, so it can be tried out before
+                // turning it on — same as the explosion preview.
+                active={previewHappyHour && !previewExploding}
+                happyHourStyle={{ ...happyHourStyle, enabled: true }}
+                multiplier={snapshot?.boostActive ? (snapshot.boostMultiplier ?? 2) : 2}
               >
-                {previewExploding && <ExplosionBurst color={explosionColor} />}
                 <div
-                  className={
-                    previewExploding ? 'overlay-pill-group overlay-exploded' : 'overlay-pill-group'
-                  }
-                  style={{ background: colors.timerBg }}
+                  className={previewExploding ? 'overlay-explosion-wrap' : undefined}
+                  style={previewExploding ? explosionColorStyle(explosionColor) : undefined}
                 >
-                  {snapshot?.statsRotationEnabled && (
-                    <>
-                      <RotatingStatPill
-                        colors={colors}
-                        icons={icons}
-                        subsGiven={snapshot.subsGiven}
-                        bitsGiven={snapshot.bitsGiven}
-                        donationsGiven={snapshot.donationsGiven}
-                      />
-                      <div
-                        className="overlay-pill-divider"
-                        style={{ background: colors.timerText }}
-                      />
-                    </>
-                  )}
-                  {snapshot?.moneyGoal ? (
-                    <>
-                      <div
-                        className="overlay-pill"
-                        style={{ background: colors.moneyBg, color: colors.moneyText }}
-                      >
-                        <span className="overlay-money-label">
-                          ${formatWholeMoney(totalMoneyRaised)} / $
-                          {formatWholeMoney(snapshot.moneyGoal)}
-                        </span>
-                      </div>
-                      <div
-                        className="overlay-pill-divider"
-                        style={{ background: colors.timerText }}
-                      />
-                    </>
-                  ) : null}
+                  {previewExploding && <ExplosionBurst color={explosionColor} />}
                   <div
-                    className="overlay-pill"
-                    style={{ background: colors.timerBg, color: colors.timerText }}
+                    className={
+                      previewExploding ? 'overlay-pill-group overlay-exploded' : 'overlay-pill-group'
+                    }
+                    style={{ background: colors.timerBg }}
                   >
-                    <span className="overlay-clock">
-                      {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
-                    </span>
+                    {snapshot?.statsRotationEnabled && (
+                      <>
+                        <RotatingStatPill
+                          colors={colors}
+                          icons={icons}
+                          subsGiven={snapshot.subsGiven}
+                          bitsGiven={snapshot.bitsGiven}
+                          donationsGiven={snapshot.donationsGiven}
+                        />
+                        <div
+                          className="overlay-pill-divider"
+                          style={{ background: colors.timerText }}
+                        />
+                      </>
+                    )}
+                    {snapshot?.moneyGoal ? (
+                      <>
+                        <div
+                          className="overlay-pill"
+                          style={{ background: colors.moneyBg, color: colors.moneyText }}
+                        >
+                          <span className="overlay-money-label">
+                            ${formatWholeMoney(totalMoneyRaised)} / $
+                            {formatWholeMoney(snapshot.moneyGoal)}
+                          </span>
+                        </div>
+                        <div
+                          className="overlay-pill-divider"
+                          style={{ background: colors.timerText }}
+                        />
+                      </>
+                    ) : null}
+                    <div
+                      className="overlay-pill"
+                      style={{ background: colors.timerBg, color: colors.timerText }}
+                    >
+                      <span className="overlay-clock">
+                        {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              </HappyHourWrap>
               <div className="overlay-goals-list">
                 {previewMilestones.map((m) => {
                   const reached = totalMoneyRaised >= m.amount
@@ -1039,6 +1157,20 @@ export default function Styling() {
               color={explosionColor}
               onChange={setExplosionColorState}
               onSave={() => setExplosionColor(timerId, explosionColor)}
+            />
+          </section>
+
+          <section className="styling-stats-section">
+            <h2>Happy hour animation</h2>
+            <p className="control-hint">
+              Plays on the timer while a happy hour (a "!timer hh" chat
+              command or the dashboard's Start Happy Hour) is running. Use
+              the "Preview happy hour" button above to try it out.
+            </p>
+            <HappyHourStyleForm
+              style={happyHourStyle}
+              onChange={setHappyHourStyleState}
+              onSave={() => setHappyHourStyle(timerId, happyHourStyle)}
             />
           </section>
 

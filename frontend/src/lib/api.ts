@@ -1,6 +1,7 @@
 import type {
   AuthPlatform,
   EventType,
+  HappyHourStyle,
   Leaderboard,
   Me,
   MilestoneAlert,
@@ -333,6 +334,18 @@ export function setExplosionColor(
   return request(`/api/timers/${timerId}/explosion-color`, {
     method: 'PUT',
     body: JSON.stringify({ color }),
+  })
+}
+
+/** Changes the main overlay's happy hour animation (see
+ * Snapshot.happyHourStyle). */
+export function setHappyHourStyle(
+  timerId: string,
+  style: HappyHourStyle,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/happy-hour-style`, {
+    method: 'PUT',
+    body: JSON.stringify(style),
   })
 }
 

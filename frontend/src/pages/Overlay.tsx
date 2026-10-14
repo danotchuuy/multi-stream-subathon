@@ -5,6 +5,7 @@ import { getMilestoneAlerts } from '../lib/api'
 import { formatDuration, formatWholeMoney } from '../lib/format'
 import { useMilestoneAlertSounds } from '../lib/alertSound'
 import { DEFAULT_EXPLOSION_COLOR, explosionColorStyle, ExplosionBurst } from '../lib/explosion'
+import { DEFAULT_HAPPY_HOUR_STYLE, HappyHourWrap } from '../lib/happyHour'
 import { DEFAULT_OVERLAY_COLORS } from '../lib/overlayColors'
 import { DEFAULT_STAT_ICONS, RotatingStatPill } from '../lib/statRotation'
 import type { MilestoneAlert } from '../types'
@@ -76,57 +77,65 @@ export default function Overlay() {
 
   return (
     <div className="overlay">
-      <div
-        className={exploded ? 'overlay-explosion-wrap' : undefined}
-        style={exploded ? explosionColorStyle(explosionColor) : undefined}
+      <HappyHourWrap
+        // The finale takes over once the clock hits zero, even if a happy
+        // hour is still technically running.
+        active={Boolean(snapshot?.boostActive) && !exploded}
+        happyHourStyle={snapshot?.happyHourStyle ?? DEFAULT_HAPPY_HOUR_STYLE}
+        multiplier={snapshot?.boostMultiplier ?? 2}
       >
-        {exploded && <ExplosionBurst color={explosionColor} />}
         <div
-          className={exploded ? 'overlay-pill-group overlay-exploded' : 'overlay-pill-group'}
-          style={{ background: colors.timerBg }}
+          className={exploded ? 'overlay-explosion-wrap' : undefined}
+          style={exploded ? explosionColorStyle(explosionColor) : undefined}
         >
-          {snapshot?.statsRotationEnabled ? (
-            <>
-              <RotatingStatPill
-                colors={colors}
-                icons={icons}
-                subsGiven={snapshot.subsGiven}
-                bitsGiven={snapshot.bitsGiven}
-                donationsGiven={snapshot.donationsGiven}
-              />
-              <div
-                className="overlay-pill-divider"
-                style={{ background: colors.timerText }}
-              />
-            </>
-          ) : null}
-          {snapshot?.moneyGoal ? (
-            <>
-              <div
-                className="overlay-pill"
-                style={{ background: colors.moneyBg, color: colors.moneyText }}
-              >
-                <span className="overlay-money-label">
-                  ${formatWholeMoney(snapshot.totalMoneyRaised)} / $
-                  {formatWholeMoney(snapshot.moneyGoal)}
-                </span>
-              </div>
-              <div
-                className="overlay-pill-divider"
-                style={{ background: colors.timerText }}
-              />
-            </>
-          ) : null}
+          {exploded && <ExplosionBurst color={explosionColor} />}
           <div
-            className="overlay-pill"
-            style={{ background: colors.timerBg, color: colors.timerText }}
+            className={exploded ? 'overlay-pill-group overlay-exploded' : 'overlay-pill-group'}
+            style={{ background: colors.timerBg }}
           >
-            <span className="overlay-clock">
-              {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
-            </span>
+            {snapshot?.statsRotationEnabled ? (
+              <>
+                <RotatingStatPill
+                  colors={colors}
+                  icons={icons}
+                  subsGiven={snapshot.subsGiven}
+                  bitsGiven={snapshot.bitsGiven}
+                  donationsGiven={snapshot.donationsGiven}
+                />
+                <div
+                  className="overlay-pill-divider"
+                  style={{ background: colors.timerText }}
+                />
+              </>
+            ) : null}
+            {snapshot?.moneyGoal ? (
+              <>
+                <div
+                  className="overlay-pill"
+                  style={{ background: colors.moneyBg, color: colors.moneyText }}
+                >
+                  <span className="overlay-money-label">
+                    ${formatWholeMoney(snapshot.totalMoneyRaised)} / $
+                    {formatWholeMoney(snapshot.moneyGoal)}
+                  </span>
+                </div>
+                <div
+                  className="overlay-pill-divider"
+                  style={{ background: colors.timerText }}
+                />
+              </>
+            ) : null}
+            <div
+              className="overlay-pill"
+              style={{ background: colors.timerBg, color: colors.timerText }}
+            >
+              <span className="overlay-clock">
+                {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+              </span>
+            </div>
           </div>
         </div>
-      </div>
+      </HappyHourWrap>
     </div>
   )
 }

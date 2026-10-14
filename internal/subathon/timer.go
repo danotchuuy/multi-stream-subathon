@@ -4,8 +4,11 @@
 package subathon
 
 import (
+	"errors"
 	"fmt"
 	"math"
+	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -52,6 +55,52 @@ func DefaultOverlayColors() OverlayColors {
 // explodes" finale's color (see Timer.SetExplosionColor) — a warm orange,
 // matching the flash/ring/shards/embers' original fixed color.
 const DefaultExplosionColor = "#ff8c00"
+
+// HappyHourStyle customizes the main overlay's animation while a "Happy
+// Hour" time boost is active (see Timer.StartTimeBoost).
+type HappyHourStyle struct {
+	// Enabled turns the animation on or off entirely.
+	Enabled bool `json:"enabled"`
+	// Style is one of HappyHourAnimationStyles, e.g. "glow".
+	Style string `json:"style"`
+	// Color is the hex color (e.g. "#ffc400") the animation is tinted.
+	// Unused by "rainbow", which cycles through every hue.
+	Color string `json:"color"`
+	// ShowBadge shows a small "🔥 2× HAPPY HOUR" badge above the timer
+	// pill, carrying the live boost multiplier.
+	ShowBadge bool `json:"showBadge"`
+}
+
+// HappyHourAnimationStyles is every valid HappyHourStyle.Style.
+var HappyHourAnimationStyles = []string{"glow", "rainbow", "sparkles", "pulse"}
+
+// DefaultHappyHourStyle is used until a timer customizes its happy hour
+// animation — on by default (unlike the explosion finale), since a happy
+// hour only ever runs when someone deliberately starts one.
+var DefaultHappyHourStyle = HappyHourStyle{
+	Enabled:   true,
+	Style:     "glow",
+	Color:     "#ffc400",
+	ShowBadge: true,
+}
+
+// ErrInvalidHappyHourStyle is returned by Timer.SetHappyHourStyle for an
+// unknown style or a malformed color.
+var ErrInvalidHappyHourStyle = errors.New("invalid happy hour animation style or color")
+
+var hexColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// fillHappyHourStyle fills an unset style/color from
+// DefaultHappyHourStyle.
+func fillHappyHourStyle(s HappyHourStyle) HappyHourStyle {
+	if s.Style == "" {
+		s.Style = DefaultHappyHourStyle.Style
+	}
+	if s.Color == "" {
+		s.Color = DefaultHappyHourStyle.Color
+	}
+	return s
+}
 
 // fillExplosionColor returns c, or DefaultExplosionColor if c is empty.
 func fillExplosionColor(c string) string {
@@ -311,6 +360,11 @@ type Snapshot struct {
 	BoostEndsAt     time.Time `json:"boostEndsAt,omitempty"`
 	BoostMultiplier float64   `json:"boostMultiplier"`
 
+	// HappyHourStyle customizes the main overlay's animation while
+	// BoostActive. Always fully populated (DefaultHappyHourStyle filled
+	// in), never partial. See Timer.SetHappyHourStyle.
+	HappyHourStyle HappyHourStyle `json:"happyHourStyle"`
+
 	// MilestonesVersion increments each time the money milestones are
 	// saved, so a live /goals-overlay knows to refetch them (they aren't
 	// part of the snapshot itself). Resets on restart, which is harmless:
@@ -422,6 +476,10 @@ type Timer struct {
 	boostEndsAt     time.Time
 	boostMultiplier float64
 
+	// happyHourStyle backs Snapshot.HappyHourStyle; always filled (see
+	// fillHappyHourStyle).
+	happyHourStyle HappyHourStyle
+
 	// totalMoneyRaised/moneyGoal mirror totalAdded/the clock, but for
 	// money: totalMoneyRaised accumulates every event's MoneyAdded;
 	// moneyGoal is the configured target (0 = none set).
@@ -512,21 +570,27 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		mods[id] = true
 	}
 	return &Timer{
-		repo:                         repo,
-		id:                           rec.ID,
-		userID:                       rec.UserID,
-		name:                         rec.Name,
-		running:                      rec.Running,
-		startedAt:                    rec.StartedAt,
-		endsAt:                       rec.EndsAt,
-		remaining:                    time.Duration(rec.RemainingSecs) * time.Second,
-		totalAdded:                   rec.TotalAddedSecs,
-		events:                       events,
-		locked:                       rec.Locked,
-		hidden:                       rec.Hidden,
-		ended:                        rec.Ended,
-		boostEndsAt:                  rec.BoostEndsAt,
-		boostMultiplier:              normalizeBoostMultiplier(rec.BoostMultiplier),
+		repo:            repo,
+		id:              rec.ID,
+		userID:          rec.UserID,
+		name:            rec.Name,
+		running:         rec.Running,
+		startedAt:       rec.StartedAt,
+		endsAt:          rec.EndsAt,
+		remaining:       time.Duration(rec.RemainingSecs) * time.Second,
+		totalAdded:      rec.TotalAddedSecs,
+		events:          events,
+		locked:          rec.Locked,
+		hidden:          rec.Hidden,
+		ended:           rec.Ended,
+		boostEndsAt:     rec.BoostEndsAt,
+		boostMultiplier: normalizeBoostMultiplier(rec.BoostMultiplier),
+		happyHourStyle: fillHappyHourStyle(HappyHourStyle{
+			Enabled:   rec.HappyHourAnimationEnabled,
+			Style:     rec.HappyHourAnimationStyle,
+			Color:     rec.HappyHourAnimationColor,
+			ShowBadge: rec.HappyHourAnimationBadge,
+		}),
 		totalMoneyRaised:             rec.TotalMoneyRaised,
 		moneyGoal:                    rec.MoneyGoal,
 		twitchBroadcasterID:          rec.TwitchBroadcasterID,
@@ -964,6 +1028,23 @@ func (t *Timer) StartTimeBoost(d time.Duration, multiplier float64) error {
 
 	t.boostEndsAt = time.Now().Add(d)
 	t.boostMultiplier = normalizeBoostMultiplier(multiplier)
+	return t.persistLocked()
+}
+
+// SetHappyHourStyle changes the main overlay's happy hour animation (see
+// Snapshot.HappyHourStyle). An empty style/color falls back to
+// DefaultHappyHourStyle's; an unknown style or a color that isn't
+// "#rrggbb" returns ErrInvalidHappyHourStyle.
+func (t *Timer) SetHappyHourStyle(s HappyHourStyle) error {
+	s = fillHappyHourStyle(s)
+	if !slices.Contains(HappyHourAnimationStyles, s.Style) || !hexColorPattern.MatchString(s.Color) {
+		return ErrInvalidHappyHourStyle
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.happyHourStyle = s
 	return t.persistLocked()
 }
 
@@ -1435,6 +1516,7 @@ func (t *Timer) Snapshot() Snapshot {
 		BoostActive:          boostActive,
 		BoostEndsAt:          boostEndsAt,
 		BoostMultiplier:      t.boostMultiplier,
+		HappyHourStyle:       t.happyHourStyle,
 		OverlayColors:        t.overlayColors,
 		SubsGiven:            t.subsGiven,
 		BitsGiven:            t.bitsGiven,
@@ -1471,6 +1553,10 @@ func (t *Timer) persistLocked() error {
 		Ended:                        t.ended,
 		BoostEndsAt:                  t.boostEndsAt,
 		BoostMultiplier:              t.boostMultiplier,
+		HappyHourAnimationEnabled:    t.happyHourStyle.Enabled,
+		HappyHourAnimationStyle:      t.happyHourStyle.Style,
+		HappyHourAnimationColor:      t.happyHourStyle.Color,
+		HappyHourAnimationBadge:      t.happyHourStyle.ShowBadge,
 		TwitchBroadcasterID:          t.twitchBroadcasterID,
 		TwitchBroadcasterUsername:    t.twitchBroadcasterUsername,
 		KickBroadcasterID:            t.kickBroadcasterID,

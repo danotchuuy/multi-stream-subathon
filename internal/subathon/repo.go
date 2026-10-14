@@ -71,6 +71,15 @@ type TimerRecord struct {
 	// DefaultBoostMultiplier.
 	BoostMultiplier float64
 
+	// HappyHourAnimation* customize the main overlay's animation while a
+	// time boost is active (see Timer.SetHappyHourStyle). Empty style/
+	// color mean not yet customized — callers layer
+	// DefaultHappyHourStyle on top.
+	HappyHourAnimationEnabled bool
+	HappyHourAnimationStyle   string
+	HappyHourAnimationColor   string
+	HappyHourAnimationBadge   bool
+
 	// OverlayTimerBg/OverlayTimerText/OverlayMoneyBg/OverlayMoneyText/
 	// OverlayGoalBg/OverlayGoalText/OverlayGoalAmountBg/
 	// OverlayGoalAmountText are hex colors customizing the public

@@ -115,6 +115,10 @@ export interface Snapshot {
    * empty. */
   explosionColor: string
 
+  /** The main overlay's animation while boostActive (a Happy Hour).
+   * Always fully populated (server fills in defaults), never partial. */
+  happyHourStyle: HappyHourStyle
+
   /** Master on/off switch for the main overlay's countdown alerts
    * (client-side — see lib/alertSound.ts): while off, none of the
    * timer's configured MilestoneAlerts play, regardless of the list
@@ -316,4 +320,16 @@ export interface Me {
   id: string
   displayName: string
   identities: Identity[]
+}
+
+export type HappyHourAnimationStyle = 'glow' | 'rainbow' | 'sparkles' | 'pulse'
+
+/** Mirrors subathon.HappyHourStyle — see Snapshot.happyHourStyle. */
+export interface HappyHourStyle {
+  enabled: boolean
+  style: HappyHourAnimationStyle
+  /** Hex color, e.g. "#ffc400". Unused by the "rainbow" style. */
+  color: string
+  /** Shows a "🔥 2× HAPPY HOUR" badge above the timer pill. */
+  showBadge: boolean
 }

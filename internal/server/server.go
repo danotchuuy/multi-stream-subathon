@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -202,6 +203,7 @@ func New(deps Deps) http.Handler {
 				r.Put("/stats-rotation", handleSetStatsRotation(deps.Hub))
 				r.Put("/explosion", handleSetExplosion(deps.Hub))
 				r.Put("/explosion-color", handleSetExplosionColor(deps.Hub))
+				r.Put("/happy-hour-style", handleSetHappyHourStyle(deps.Hub))
 				r.Put("/alert-sounds", handleSetAlertSounds(deps.Hub))
 				r.Put("/milestone-alerts", handleSaveMilestoneAlerts(deps.Hub))
 				r.Put("/contribution-counts", handleSetContributionCounts(deps.Hub))
@@ -962,6 +964,34 @@ func handleSetExplosion(hub *ws.Hub) http.HandlerFunc {
 		if err := t.SetExplosionEnabled(req.Enabled); err != nil {
 			log.Printf("server: set explosion for timer %s: %v", t.ID(), err)
 			http.Error(w, "failed to set explosion", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+// handleSetHappyHourStyle changes the main overlay's happy hour
+// animation (see Timer.SetHappyHourStyle). The body is a
+// subathon.HappyHourStyle; an unknown style or malformed color is a 400.
+func handleSetHappyHourStyle(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req subathon.HappyHourStyle
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := t.SetHappyHourStyle(req); err != nil {
+			if errors.Is(err, subathon.ErrInvalidHappyHourStyle) {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			log.Printf("server: set happy hour style for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set happy hour animation", http.StatusInternalServerError)
 			return
 		}
 

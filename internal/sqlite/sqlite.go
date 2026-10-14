@@ -75,6 +75,10 @@ CREATE TABLE IF NOT EXISTS timers (
 	ended                         INTEGER NOT NULL DEFAULT 0,
 	boost_ends_at                 TEXT,
 	boost_multiplier              REAL NOT NULL DEFAULT 2,
+	hh_animation_enabled          INTEGER NOT NULL DEFAULT 1,
+	hh_animation_style            TEXT NOT NULL DEFAULT '',
+	hh_animation_color            TEXT NOT NULL DEFAULT '',
+	hh_animation_badge            INTEGER NOT NULL DEFAULT 1,
 	overlay_timer_bg              TEXT NOT NULL DEFAULT '',
 	overlay_timer_text            TEXT NOT NULL DEFAULT '',
 	overlay_money_bg              TEXT NOT NULL DEFAULT '',
@@ -394,6 +398,20 @@ func Open(path string) (*Repo, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate timers.boost_multiplier: %w", err)
 	}
+	// Enabled/badge default to 1 (on), matching
+	// subathon.DefaultHappyHourStyle; style/color default to '' (filled in
+	// from DefaultHappyHourStyle when loaded).
+	for _, col := range []struct{ name, def string }{
+		{"hh_animation_enabled", "INTEGER NOT NULL DEFAULT 1"},
+		{"hh_animation_style", "TEXT NOT NULL DEFAULT ''"},
+		{"hh_animation_color", "TEXT NOT NULL DEFAULT ''"},
+		{"hh_animation_badge", "INTEGER NOT NULL DEFAULT 1"},
+	} {
+		if err := addColumnIfMissing(db, "timers", col.name, col.def); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate timers.%s: %w", col.name, err)
+		}
+	}
 
 	// reward_rules moved from being keyed by user_id to timer_id (reward
 	// rates are now per-timer, not account-wide). A pre-existing table
@@ -526,6 +544,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		       twitch_broadcaster_id, twitch_broadcaster_username,
 		       kick_broadcaster_id, kick_broadcaster_username,
 		       youtube_channel_id, youtube_channel_title, locked, hidden, ended, boost_ends_at, boost_multiplier,
+		       hh_animation_enabled, hh_animation_style, hh_animation_color, hh_animation_badge,
 		       overlay_timer_bg, overlay_timer_text, overlay_money_bg, overlay_money_text,
 		       overlay_goal_bg, overlay_goal_text, overlay_goal_amount_bg, overlay_goal_amount_text,
 		       stream_elements_token, stream_elements_refresh_token, stream_elements_token_expires_at,
@@ -553,6 +572,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		var youtubeChannelID, youtubeChannelTitle sql.NullString
 		var streamElementsTokenExpiresAt sql.NullString
 		var boostEndsAt sql.NullString
+		var hhAnimEnabled, hhAnimBadge int
 		var createdAt, updatedAt string
 
 		if err := rows.Scan(&rec.ID, &userID, &rec.Name, &running, &startedAt, &endsAt,
@@ -560,6 +580,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 			&twitchBroadcasterID, &twitchBroadcasterUsername,
 			&kickBroadcasterID, &kickBroadcasterUsername,
 			&youtubeChannelID, &youtubeChannelTitle, &locked, &hidden, &ended, &boostEndsAt, &rec.BoostMultiplier,
+			&hhAnimEnabled, &rec.HappyHourAnimationStyle, &rec.HappyHourAnimationColor, &hhAnimBadge,
 			&rec.OverlayTimerBg, &rec.OverlayTimerText, &rec.OverlayMoneyBg, &rec.OverlayMoneyText,
 			&rec.OverlayGoalBg, &rec.OverlayGoalText, &rec.OverlayGoalAmountBg, &rec.OverlayGoalAmountText,
 			&rec.StreamElementsToken, &rec.StreamElementsRefreshToken, &streamElementsTokenExpiresAt,
@@ -588,6 +609,8 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		rec.Hidden = hidden != 0
 		rec.Ended = ended != 0
 		rec.BoostEndsAt = parseTime(boostEndsAt.String)
+		rec.HappyHourAnimationEnabled = hhAnimEnabled != 0
+		rec.HappyHourAnimationBadge = hhAnimBadge != 0
 		rec.StatsRotationEnabled = showStatsRotation != 0
 		rec.ExplosionEnabled = showExplosion != 0
 		rec.AlertSoundsEnabled = showAlertSounds != 0
@@ -607,6 +630,7 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		     twitch_broadcaster_id = ?, twitch_broadcaster_username = ?,
 		     kick_broadcaster_id = ?, kick_broadcaster_username = ?,
 		     youtube_channel_id = ?, youtube_channel_title = ?, locked = ?, hidden = ?, ended = ?, boost_ends_at = ?, boost_multiplier = ?,
+		     hh_animation_enabled = ?, hh_animation_style = ?, hh_animation_color = ?, hh_animation_badge = ?,
 		     overlay_timer_bg = ?, overlay_timer_text = ?, overlay_money_bg = ?, overlay_money_text = ?,
 		     overlay_goal_bg = ?, overlay_goal_text = ?, overlay_goal_amount_bg = ?, overlay_goal_amount_text = ?,
 		     stream_elements_token = ?, stream_elements_refresh_token = ?, stream_elements_token_expires_at = ?,
@@ -624,6 +648,7 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		nullableString(rec.KickBroadcasterID), nullableString(rec.KickBroadcasterUsername),
 		nullableString(rec.YouTubeChannelID), nullableString(rec.YouTubeChannelTitle),
 		boolToInt(rec.Locked), boolToInt(rec.Hidden), boolToInt(rec.Ended), nullableTime(rec.BoostEndsAt), rec.BoostMultiplier,
+		boolToInt(rec.HappyHourAnimationEnabled), rec.HappyHourAnimationStyle, rec.HappyHourAnimationColor, boolToInt(rec.HappyHourAnimationBadge),
 		rec.OverlayTimerBg, rec.OverlayTimerText, rec.OverlayMoneyBg, rec.OverlayMoneyText,
 		rec.OverlayGoalBg, rec.OverlayGoalText, rec.OverlayGoalAmountBg, rec.OverlayGoalAmountText,
 		rec.StreamElementsToken, rec.StreamElementsRefreshToken, nullableTime(rec.StreamElementsTokenExpiresAt),

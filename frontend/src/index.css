@@ -1416,3 +1416,161 @@ footer {
 .dashboard-main header > .status {
   margin-left: auto;
 }
+
+/* Happy hour animation (see lib/happyHour.tsx's HappyHourWrap): wraps
+   the main overlay's pill group while a time boost is active.
+   --hh-color/--hh-text are set inline from Snapshot.happyHourStyle. */
+.overlay-hh-wrap {
+  position: relative;
+  display: inline-flex;
+  border-radius: 999px;
+}
+
+.overlay-hh-badge {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--hh-color);
+  color: var(--hh-text);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  animation: overlay-hh-badge-bob 1.6s ease-in-out infinite;
+  z-index: 2;
+}
+
+.overlay-hh-rainbow .overlay-hh-badge {
+  background: linear-gradient(90deg, #ff3b3b, #ffb700, #3bd16f, #3b9dff, #b04bff);
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+
+@keyframes overlay-hh-badge-bob {
+  0%,
+  100% {
+    transform: translate(-50%, 0);
+  }
+  50% {
+    transform: translate(-50%, -3px);
+  }
+}
+
+/* Glow: a pulsing colored halo. */
+.overlay-hh-glow .overlay-pill-group {
+  animation: overlay-hh-glow 1.8s ease-in-out infinite;
+}
+
+@keyframes overlay-hh-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.4),
+      0 0 6px 1px var(--hh-color);
+  }
+  50% {
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.4),
+      0 0 26px 8px var(--hh-color);
+  }
+}
+
+/* Rainbow: a cycling rainbow ring, drawn as the wrapper's own padded
+   background behind the pill group. */
+.overlay-hh-rainbow {
+  padding: 4px;
+  background: linear-gradient(
+    90deg,
+    #ff3b3b,
+    #ffb700,
+    #fff23b,
+    #3bd16f,
+    #3b9dff,
+    #b04bff,
+    #ff3b3b
+  );
+  background-size: 300% 100%;
+  animation: overlay-hh-rainbow 3s linear infinite;
+  box-shadow: 0 0 18px rgba(255, 255, 255, 0.25);
+}
+
+@keyframes overlay-hh-rainbow {
+  from {
+    background-position: 0% 50%;
+  }
+  to {
+    background-position: 300% 50%;
+  }
+}
+
+/* Pulse: the pill group gently scales in and out with a soft tint. */
+.overlay-hh-pulse .overlay-pill-group {
+  animation: overlay-hh-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes overlay-hh-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.4),
+      0 0 0 0 var(--hh-color);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow:
+      0 2px 8px rgba(0, 0, 0, 0.4),
+      0 0 0 4px var(--hh-color);
+  }
+}
+
+/* Sparkles: four-point stars twinkling just outside the pill. */
+.overlay-hh-sparkle-field {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.overlay-hh-sparkle {
+  position: absolute;
+  width: var(--size);
+  height: var(--size);
+  margin-left: calc(var(--size) / -2);
+  background: var(--hh-color);
+  clip-path: polygon(
+    50% 0%,
+    61% 39%,
+    100% 50%,
+    61% 61%,
+    50% 100%,
+    39% 61%,
+    0% 50%,
+    39% 39%
+  );
+  filter: drop-shadow(0 0 4px var(--hh-color));
+  opacity: 0;
+  animation: overlay-hh-twinkle var(--duration) ease-in-out var(--delay) infinite;
+}
+
+.overlay-hh-sparkles .overlay-pill-group {
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.4),
+    0 0 10px 2px var(--hh-color);
+}
+
+@keyframes overlay-hh-twinkle {
+  0%,
+  100% {
+    opacity: 0;
+    transform: scale(0.3) rotate(0deg);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1) rotate(45deg);
+  }
+}
