@@ -963,6 +963,184 @@ footer {
   border-radius: 8px;
 }
 
+/* "Timer explodes" finale (see ExplosionBurst in lib/explosion.tsx and
+   Snapshot.explosionEnabled/explosionColor) — wraps .overlay-pill-group
+   so the burst's flash/ring/shards can be positioned relative to it
+   without disturbing its own layout. Mounted only once remainingSecs
+   reaches 0, so every animation below plays exactly once per page load
+   (the element is never recreated afterwards) except the ember glow,
+   which is deliberately infinite. --explosion-color is set inline here
+   (see explosionColorStyle) and inherited by every rule below that
+   reads it, including .overlay-pill-group.overlay-exploded's glow. */
+.overlay-explosion-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.overlay-explosion-burst {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* Applied to .overlay-pill-group itself once exploded — a quick once-off
+   shake, then it settles into a slow, infinite smoldering glow. */
+.overlay-pill-group.overlay-exploded {
+  animation:
+    overlay-explosion-shake 0.5s cubic-bezier(0.36, 0.07, 0.19, 0.97) 1,
+    overlay-explosion-glow 2.2s ease-in-out 0.5s infinite;
+}
+
+@keyframes overlay-explosion-shake {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  10% {
+    transform: translate(-6px, 2px) rotate(-1deg);
+  }
+  20% {
+    transform: translate(5px, -3px) rotate(1deg);
+  }
+  30% {
+    transform: translate(-4px, 3px) rotate(-1deg);
+  }
+  40% {
+    transform: translate(4px, -2px) rotate(1deg);
+  }
+  55% {
+    transform: translate(-2px, 2px);
+  }
+  70% {
+    transform: translate(2px, -1px);
+  }
+  85% {
+    transform: translate(-1px, 1px);
+  }
+}
+
+@keyframes overlay-explosion-glow {
+  0%,
+  100% {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+      0 0 0 color-mix(in srgb, var(--explosion-color, #ff8c00) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4),
+      0 0 26px 6px color-mix(in srgb, var(--explosion-color, #ff8c00) 55%, transparent);
+  }
+}
+
+/* White-hot flash at the moment of impact — expands and fades fast,
+   sitting above everything else for an instant. --explosion-color (see
+   explosionColorStyle, set on .overlay-explosion-wrap) tints it, fading
+   from white-hot at the center to transparent at the edge. */
+.overlay-explosion-flash {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: radial-gradient(
+    circle,
+    #fff 0%,
+    var(--explosion-color, #ff8c00) 35%,
+    color-mix(in srgb, var(--explosion-color, #ff8c00) 0%, transparent) 75%
+  );
+  animation: overlay-explosion-flash 0.5s ease-out 1 forwards;
+  pointer-events: none;
+}
+
+@keyframes overlay-explosion-flash {
+  0% {
+    opacity: 0.95;
+    transform: scale(0.6);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.8);
+  }
+}
+
+/* A dark shockwave ring punching outward right after the flash. */
+.overlay-explosion-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  border: 3px solid color-mix(in srgb, var(--explosion-color, #ff8c00) 80%, transparent);
+  animation: overlay-explosion-ring 0.7s ease-out 0.1s 1 forwards;
+  pointer-events: none;
+}
+
+@keyframes overlay-explosion-ring {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
+}
+
+/* Debris shards flung outward from the center — see ExplosionBurst,
+   which sets each shard's --angle/--distance/--size/--delay inline so
+   this one keyframe can drive all of them at once, fanned out in a
+   circle. */
+.overlay-explosion-shard {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2);
+  background: var(--shard-color, #ff8c00);
+  clip-path: polygon(50% 0%, 100% 100%, 0% 100%);
+  opacity: 0;
+  animation: overlay-explosion-shard 0.9s cubic-bezier(0.17, 0.67, 0.4, 1) var(--delay, 0s) 1 forwards;
+  pointer-events: none;
+}
+
+@keyframes overlay-explosion-shard {
+  0% {
+    opacity: 1;
+    transform: rotate(var(--angle)) translateX(0) rotate(0deg) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--angle)) translateX(var(--distance)) rotate(260deg) scale(0.4);
+  }
+}
+
+/* Lingering embers once the shards have settled — small glowing specks
+   drifting upward on an infinite loop, giving the exploded timer a
+   "still smoldering" look rather than just going still. */
+.overlay-explosion-ember {
+  position: absolute;
+  bottom: 10%;
+  left: var(--left, 50%);
+  width: var(--size, 4px);
+  height: var(--size, 4px);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--explosion-color, #ff8c00) 70%, #fff);
+  box-shadow: 0 0 6px 2px color-mix(in srgb, var(--explosion-color, #ff8c00) 80%, transparent);
+  opacity: 0;
+  animation: overlay-explosion-ember 2.4s ease-in var(--delay, 0s) infinite;
+  pointer-events: none;
+}
+
+@keyframes overlay-explosion-ember {
+  0% {
+    opacity: 0;
+    transform: translateY(0) scale(1);
+  }
+  15% {
+    opacity: 0.9;
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-46px) scale(0.3);
+  }
+}
+
 /* Leaderboard panel (Panel.tsx) — unlike the overlay pages above, this
    page has its own real (customizable) background rather than
    compositing transparently over OBS video, since it's meant for a

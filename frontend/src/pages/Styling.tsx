@@ -3,8 +3,13 @@ import { Link, useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
 import {
   getLeaderboard,
+  getMilestoneAlerts,
   getMoneyMilestones,
+  saveMilestoneAlerts,
+  setAlertSounds,
   setContributionCounts,
+  setExplosion,
+  setExplosionColor,
   setOverlayColors,
   setPanelColors,
   setStatIcons,
@@ -12,6 +17,8 @@ import {
   HttpError,
 } from '../lib/api'
 import { formatCompactCount, formatDuration, formatWholeMoney } from '../lib/format'
+import { ALERT_SOUND_OPTIONS, DEFAULT_ALERT_SOUND, playAlertSound } from '../lib/alertSound'
+import { explosionColorStyle, ExplosionBurst } from '../lib/explosion'
 import {
   CategoryIcon,
   DEFAULT_ICON_VALUES,
@@ -23,6 +30,7 @@ import {
 } from '../lib/statRotation'
 import type {
   Leaderboard,
+  MilestoneAlert,
   MoneyMilestone,
   OverlayColors,
   PanelColors,
@@ -449,6 +457,228 @@ function PanelColorsForm({
   )
 }
 
+/** Lets the owner/moderator pick the "timer explodes" finale's color —
+ * tints the flash/ring/shards/embers (see ExplosionBurst). color/
+ * onChange are controlled by the parent, same lifted-state pattern as
+ * the overlay colors/icons/panel colors above, so the "Preview
+ * explosion" button reflects an edit immediately, even before it's
+ * saved. */
+function ExplosionColorForm({
+  color,
+  onChange,
+  onSave,
+}: {
+  color: string
+  onChange: (color: string) => void
+  onSave: () => Promise<unknown>
+}) {
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setBusy(true)
+    setSaved(false)
+    setError(null)
+    try {
+      await onSave()
+      setSaved(true)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <form className="control-group control-group-stacked" onSubmit={handleSubmit}>
+      <label>
+        Explosion color
+        <input
+          type="color"
+          value={color}
+          onChange={(e) => {
+            onChange(e.target.value)
+            setSaved(false)
+          }}
+        />
+      </label>
+      <button type="submit" disabled={busy}>
+        {saved ? 'Saved!' : 'Save explosion color'}
+      </button>
+      {error && <p className="error-message">{error}</p>}
+    </form>
+  )
+}
+
+/** A fresh timer's starting point for the countdown alert list below —
+ * purely a client-side convenience (same idea as PRESETS for overlay
+ * colors): shown once the fetched list comes back empty, so a streamer
+ * turning the master toggle on for the first time sees a sensible
+ * starting setup rather than a blank list, but nothing is saved until
+ * Save is pressed. */
+const DEFAULT_ALERTS: MilestoneAlert[] = [
+  { hours: 10, minutes: 0, sound: DEFAULT_ALERT_SOUND },
+  { hours: 5, minutes: 0, sound: DEFAULT_ALERT_SOUND },
+  { hours: 1, minutes: 0, sound: DEFAULT_ALERT_SOUND },
+]
+
+/** Lets the owner/moderator build the "when should it chime, and with
+ * what sound" countdown alert list (see Timer.MilestoneAlerts) — same
+ * fetch-its-own-data, add/remove-rows, explicit-Save shape as Rewards.tsx's
+ * MilestonesEditor. Each row's ▶ button plays that row's sound
+ * immediately, so picking one doesn't require saving and waiting for
+ * the clock to reach it first. */
+function MilestoneAlertsEditor({ timerId }: { timerId: string }) {
+  const [alerts, setAlerts] = useState<MilestoneAlert[] | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    getMilestoneAlerts(timerId)
+      .then((loaded) => setAlerts(loaded.length > 0 ? loaded : DEFAULT_ALERTS))
+      .catch(() => setError('Failed to load countdown alerts.'))
+  }, [timerId])
+
+  const handleChange = (
+    index: number,
+    field: 'hours' | 'minutes',
+    value: string,
+  ) => {
+    setAlerts((prev) => {
+      if (!prev) return prev
+      const next = [...prev]
+      const parsed = Math.max(0, Math.trunc(Number(value)) || 0)
+      next[index] = {
+        ...next[index],
+        [field]: field === 'minutes' ? Math.min(59, parsed) : parsed,
+      }
+      return next
+    })
+    setSaved(false)
+  }
+
+  const handleSoundChange = (index: number, sound: MilestoneAlert['sound']) => {
+    setAlerts((prev) => {
+      if (!prev) return prev
+      const next = [...prev]
+      next[index] = { ...next[index], sound }
+      return next
+    })
+    setSaved(false)
+  }
+
+  const handleAdd = () => {
+    setAlerts((prev) => [
+      ...(prev ?? []),
+      { hours: 0, minutes: 30, sound: DEFAULT_ALERT_SOUND },
+    ])
+    setSaved(false)
+  }
+
+  const handleRemove = (index: number) => {
+    setAlerts((prev) => prev?.filter((_, i) => i !== index) ?? prev)
+    setSaved(false)
+  }
+
+  const handleSave = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!alerts) return
+    setError(null)
+    const cleaned = [...alerts].sort(
+      (a, b) => b.hours * 60 + b.minutes - (a.hours * 60 + a.minutes),
+    )
+    setBusy(true)
+    try {
+      const result = await saveMilestoneAlerts(timerId, cleaned)
+      setAlerts(result)
+      setSaved(true)
+    } catch {
+      setError('Failed to save countdown alerts. Please try again.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (!alerts) {
+    return (
+      <>
+        {error && <p className="error-message">{error}</p>}
+        <p className="empty">Loading…</p>
+      </>
+    )
+  }
+
+  return (
+    <form onSubmit={handleSave}>
+      {error && <p className="error-message">{error}</p>}
+      <div className="milestone-list">
+        {alerts.map((a, i) => (
+          <div className="control-group" key={i}>
+            <label>
+              Hours left
+              <input
+                type="number"
+                min={0}
+                step={1}
+                value={a.hours}
+                onChange={(e) => handleChange(i, 'hours', e.target.value)}
+              />
+            </label>
+            <label>
+              Minutes left
+              <input
+                type="number"
+                min={0}
+                max={59}
+                step={1}
+                value={a.minutes}
+                onChange={(e) => handleChange(i, 'minutes', e.target.value)}
+              />
+            </label>
+            <label>
+              Sound
+              <select
+                value={a.sound}
+                onChange={(e) =>
+                  handleSoundChange(i, e.target.value as MilestoneAlert['sound'])
+                }
+              >
+                {ALERT_SOUND_OPTIONS.map((opt) => (
+                  <option key={opt.key} value={opt.key}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button type="button" onClick={() => playAlertSound(a.sound)}>
+              ▶ Preview
+            </button>
+            <button
+              type="button"
+              className="link-button"
+              onClick={() => handleRemove(i)}
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="control-group">
+        <button type="button" onClick={handleAdd}>
+          Add alert
+        </button>
+        <button type="submit" disabled={busy}>
+          {saved ? 'Saved!' : 'Save'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
 /**
  * Full-page timer styling editor, moved out of the dashboard's control
  * grid so there's room for a live preview alongside the color pickers —
@@ -465,12 +695,16 @@ export default function Styling() {
   const [colors, setColors] = useState<OverlayColors | null>(null)
   const [icons, setIcons] = useState<StatIcons | null>(null)
   const [panelColors, setPanelColorsState] = useState<PanelColors | null>(null)
+  const [explosionColor, setExplosionColorState] = useState<string | null>(null)
   const [leaderboard, setLeaderboard] = useState<Leaderboard | null>(null)
   const [previewDark, setPreviewDark] = useState(true)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [statsRotationBusy, setStatsRotationBusy] = useState(false)
+  const [explosionBusy, setExplosionBusy] = useState(false)
+  const [alertSoundsBusy, setAlertSoundsBusy] = useState(false)
+  const [previewExploding, setPreviewExploding] = useState(false)
 
   // Seed the editable colors/icons once the timer's actual saved values
   // arrive over the websocket — only the first time, so this doesn't
@@ -486,6 +720,9 @@ export default function Styling() {
   }
   if (snapshot && panelColors === null) {
     setPanelColorsState(snapshot.panelColors)
+  }
+  if (snapshot && explosionColor === null) {
+    setExplosionColorState(snapshot.explosionColor)
   }
 
   useEffect(() => {
@@ -553,6 +790,31 @@ export default function Styling() {
     }
   }
 
+  // Same immediate-apply pattern as handleToggleStatsRotation above.
+  const handleToggleExplosion = async (enabled: boolean) => {
+    setExplosionBusy(true)
+    setError(null)
+    try {
+      await setExplosion(timerId, enabled)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setExplosionBusy(false)
+    }
+  }
+
+  const handleToggleAlertSounds = async (enabled: boolean) => {
+    setAlertSoundsBusy(true)
+    setError(null)
+    try {
+      await setAlertSounds(timerId, enabled)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setAlertSoundsBusy(false)
+    }
+  }
+
   const totalMoneyRaised = snapshot?.totalMoneyRaised ?? 0
   const previewMilestones = milestones.length > 0
     ? milestones.slice(0, 2)
@@ -571,7 +833,7 @@ export default function Styling() {
 
       {error && <p className="error-message">{error}</p>}
 
-      {colors === null || icons === null || panelColors === null ? (
+      {colors === null || icons === null || panelColors === null || explosionColor === null ? (
         <p className="empty">Loading…</p>
       ) : (
         <>
@@ -586,6 +848,12 @@ export default function Styling() {
                 />
                 Dark scene background
               </label>
+              <button
+                type="button"
+                onClick={() => setPreviewExploding((prev) => !prev)}
+              >
+                {previewExploding ? 'Stop explosion preview' : 'Preview explosion'}
+              </button>
             </div>
             <div
               className={
@@ -594,46 +862,57 @@ export default function Styling() {
                   : 'styling-preview-canvas styling-preview-canvas-light'
               }
             >
-              <div className="overlay-pill-group" style={{ background: colors.timerBg }}>
-                {snapshot?.statsRotationEnabled && (
-                  <>
-                    <RotatingStatPill
-                      colors={colors}
-                      icons={icons}
-                      subsGiven={snapshot.subsGiven}
-                      bitsGiven={snapshot.bitsGiven}
-                      donationsGiven={snapshot.donationsGiven}
-                    />
-                    <div
-                      className="overlay-pill-divider"
-                      style={{ background: colors.timerText }}
-                    />
-                  </>
-                )}
-                {snapshot?.moneyGoal ? (
-                  <>
-                    <div
-                      className="overlay-pill"
-                      style={{ background: colors.moneyBg, color: colors.moneyText }}
-                    >
-                      <span className="overlay-money-label">
-                        ${formatWholeMoney(totalMoneyRaised)} / $
-                        {formatWholeMoney(snapshot.moneyGoal)}
-                      </span>
-                    </div>
-                    <div
-                      className="overlay-pill-divider"
-                      style={{ background: colors.timerText }}
-                    />
-                  </>
-                ) : null}
+              <div
+                className={previewExploding ? 'overlay-explosion-wrap' : undefined}
+                style={previewExploding ? explosionColorStyle(explosionColor) : undefined}
+              >
+                {previewExploding && <ExplosionBurst color={explosionColor} />}
                 <div
-                  className="overlay-pill"
-                  style={{ background: colors.timerBg, color: colors.timerText }}
+                  className={
+                    previewExploding ? 'overlay-pill-group overlay-exploded' : 'overlay-pill-group'
+                  }
+                  style={{ background: colors.timerBg }}
                 >
-                  <span className="overlay-clock">
-                    {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
-                  </span>
+                  {snapshot?.statsRotationEnabled && (
+                    <>
+                      <RotatingStatPill
+                        colors={colors}
+                        icons={icons}
+                        subsGiven={snapshot.subsGiven}
+                        bitsGiven={snapshot.bitsGiven}
+                        donationsGiven={snapshot.donationsGiven}
+                      />
+                      <div
+                        className="overlay-pill-divider"
+                        style={{ background: colors.timerText }}
+                      />
+                    </>
+                  )}
+                  {snapshot?.moneyGoal ? (
+                    <>
+                      <div
+                        className="overlay-pill"
+                        style={{ background: colors.moneyBg, color: colors.moneyText }}
+                      >
+                        <span className="overlay-money-label">
+                          ${formatWholeMoney(totalMoneyRaised)} / $
+                          {formatWholeMoney(snapshot.moneyGoal)}
+                        </span>
+                      </div>
+                      <div
+                        className="overlay-pill-divider"
+                        style={{ background: colors.timerText }}
+                      />
+                    </>
+                  ) : null}
+                  <div
+                    className="overlay-pill"
+                    style={{ background: colors.timerBg, color: colors.timerText }}
+                  >
+                    <span className="overlay-clock">
+                      {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+                    </span>
+                  </div>
                 </div>
               </div>
               <div className="overlay-goals-list">
@@ -728,6 +1007,68 @@ export default function Styling() {
                 />
               </>
             )}
+          </section>
+
+          <section className="styling-stats-section">
+            <h2>Timer finale</h2>
+            <div className="control-group control-group-stacked">
+              <div className="control-row">
+                <div className="control-toggle">
+                  <span
+                    className={`status ${snapshot?.explosionEnabled ? 'status-ok' : 'status-down'}`}
+                  >
+                    {snapshot?.explosionEnabled ? 'Shown' : 'Hidden'}
+                  </span>
+                  <span className="control-hint">
+                    When the clock hits 00:00:00, the timer pill bursts
+                    apart instead of just sitting at zero — a flash,
+                    flying debris, and lingering embers. Use the preview
+                    button above to see it without waiting for the clock.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleExplosion(!snapshot?.explosionEnabled)}
+                  disabled={explosionBusy || !snapshot}
+                >
+                  {snapshot?.explosionEnabled ? 'Hide' : 'Show'}
+                </button>
+              </div>
+            </div>
+            <ExplosionColorForm
+              color={explosionColor}
+              onChange={setExplosionColorState}
+              onSave={() => setExplosionColor(timerId, explosionColor)}
+            />
+          </section>
+
+          <section className="styling-stats-section">
+            <h2>Countdown alerts</h2>
+            <div className="control-group control-group-stacked">
+              <div className="control-row">
+                <div className="control-toggle">
+                  <span
+                    className={`status ${snapshot?.alertSoundsEnabled ? 'status-ok' : 'status-down'}`}
+                  >
+                    {snapshot?.alertSoundsEnabled ? 'On' : 'Off'}
+                  </span>
+                  <span className="control-hint">
+                    Master switch for every alert below — plays its
+                    chosen sound on the overlay page itself (not through
+                    the dashboard) each time the clock counts down past
+                    one of its configured marks.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleToggleAlertSounds(!snapshot?.alertSoundsEnabled)}
+                  disabled={alertSoundsBusy || !snapshot}
+                >
+                  {snapshot?.alertSoundsEnabled ? 'Turn off' : 'Turn on'}
+                </button>
+              </div>
+            </div>
+            <MilestoneAlertsEditor timerId={timerId} />
           </section>
 
           <section className="controls">

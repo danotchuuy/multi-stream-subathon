@@ -1,9 +1,13 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
+import { getMilestoneAlerts } from '../lib/api'
 import { formatDuration, formatWholeMoney } from '../lib/format'
+import { useMilestoneAlertSounds } from '../lib/alertSound'
+import { DEFAULT_EXPLOSION_COLOR, explosionColorStyle, ExplosionBurst } from '../lib/explosion'
 import { DEFAULT_OVERLAY_COLORS } from '../lib/overlayColors'
 import { DEFAULT_STAT_ICONS, RotatingStatPill } from '../lib/statRotation'
+import type { MilestoneAlert } from '../types'
 
 /**
  * Minimal, transparent-background view meant to be added as an OBS
@@ -14,6 +18,24 @@ import { DEFAULT_STAT_ICONS, RotatingStatPill } from '../lib/statRotation'
 export default function Overlay() {
   const { timerId } = useParams<{ timerId: string }>()
   const { snapshot } = useSubathon(timerId)
+  const [alerts, setAlerts] = useState<MilestoneAlert[]>([])
+
+  // Refetched whenever alertsVersion bumps (see Styling.tsx's alert
+  // editor) — same pattern as GoalsOverlay refetching money milestones
+  // off milestonesVersion, since neither list is part of the snapshot
+  // itself.
+  useEffect(() => {
+    if (!timerId) return
+    getMilestoneAlerts(timerId)
+      .then(setAlerts)
+      .catch(() => setAlerts([]))
+  }, [timerId, snapshot?.alertsVersion])
+
+  // Plays each alert's chime as the clock counts down past it — called
+  // unconditionally (before the early returns below) since hooks can't
+  // be called conditionally; it already no-ops on a hidden/absent
+  // snapshot.
+  useMilestoneAlertSounds(snapshot, alerts)
 
   // The dashboard route wants an opaque page background; this route needs
   // to be transparent so OBS composites it over the scene.
@@ -44,51 +66,65 @@ export default function Overlay() {
   const colors = snapshot?.overlayColors ?? DEFAULT_OVERLAY_COLORS
   const icons = snapshot?.statIcons ?? DEFAULT_STAT_ICONS
 
+  // True from the moment remainingSecs first reaches 0 onward (whether
+  // that happens live while this page is open, or it's already 0 when
+  // the page loads) — and back to false the instant more time is added,
+  // so a reset/extend after the finale resumes a normal ticking pill
+  // rather than staying "exploded" forever.
+  const exploded = Boolean(snapshot?.explosionEnabled) && (snapshot?.remainingSecs ?? 1) <= 0
+  const explosionColor = snapshot?.explosionColor ?? DEFAULT_EXPLOSION_COLOR
+
   return (
     <div className="overlay">
       <div
-        className="overlay-pill-group"
-        style={{ background: colors.timerBg }}
+        className={exploded ? 'overlay-explosion-wrap' : undefined}
+        style={exploded ? explosionColorStyle(explosionColor) : undefined}
       >
-        {snapshot?.statsRotationEnabled ? (
-          <>
-            <RotatingStatPill
-              colors={colors}
-              icons={icons}
-              subsGiven={snapshot.subsGiven}
-              bitsGiven={snapshot.bitsGiven}
-              donationsGiven={snapshot.donationsGiven}
-            />
-            <div
-              className="overlay-pill-divider"
-              style={{ background: colors.timerText }}
-            />
-          </>
-        ) : null}
-        {snapshot?.moneyGoal ? (
-          <>
-            <div
-              className="overlay-pill"
-              style={{ background: colors.moneyBg, color: colors.moneyText }}
-            >
-              <span className="overlay-money-label">
-                ${formatWholeMoney(snapshot.totalMoneyRaised)} / $
-                {formatWholeMoney(snapshot.moneyGoal)}
-              </span>
-            </div>
-            <div
-              className="overlay-pill-divider"
-              style={{ background: colors.timerText }}
-            />
-          </>
-        ) : null}
+        {exploded && <ExplosionBurst color={explosionColor} />}
         <div
-          className="overlay-pill"
-          style={{ background: colors.timerBg, color: colors.timerText }}
+          className={exploded ? 'overlay-pill-group overlay-exploded' : 'overlay-pill-group'}
+          style={{ background: colors.timerBg }}
         >
-          <span className="overlay-clock">
-            {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
-          </span>
+          {snapshot?.statsRotationEnabled ? (
+            <>
+              <RotatingStatPill
+                colors={colors}
+                icons={icons}
+                subsGiven={snapshot.subsGiven}
+                bitsGiven={snapshot.bitsGiven}
+                donationsGiven={snapshot.donationsGiven}
+              />
+              <div
+                className="overlay-pill-divider"
+                style={{ background: colors.timerText }}
+              />
+            </>
+          ) : null}
+          {snapshot?.moneyGoal ? (
+            <>
+              <div
+                className="overlay-pill"
+                style={{ background: colors.moneyBg, color: colors.moneyText }}
+              >
+                <span className="overlay-money-label">
+                  ${formatWholeMoney(snapshot.totalMoneyRaised)} / $
+                  {formatWholeMoney(snapshot.moneyGoal)}
+                </span>
+              </div>
+              <div
+                className="overlay-pill-divider"
+                style={{ background: colors.timerText }}
+              />
+            </>
+          ) : null}
+          <div
+            className="overlay-pill"
+            style={{ background: colors.timerBg, color: colors.timerText }}
+          >
+            <span className="overlay-clock">
+              {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+            </span>
+          </div>
         </div>
       </div>
     </div>

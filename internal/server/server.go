@@ -139,6 +139,11 @@ func New(deps Deps) http.Handler {
 			// reached) without a login.
 			r.Get("/money-milestones", handleGetMoneyMilestones())
 
+			// Also public, same reasoning: the main overlay needs its
+			// countdown alert list (and which sound each one plays) to
+			// know when to chime, without a login.
+			r.Get("/milestone-alerts", handleGetMilestoneAlerts())
+
 			// Public too, same token — backs the top-10 leaderboard panel
 			// (meant for a Twitch "panel" under a channel's About section,
 			// not an authenticated view), same reasoning as /events, which
@@ -191,6 +196,10 @@ func New(deps Deps) http.Handler {
 				r.Put("/money-milestones", handleSaveMoneyMilestones(deps.Hub))
 				r.Put("/overlay-colors", handleSetOverlayColors(deps.Hub))
 				r.Put("/stats-rotation", handleSetStatsRotation(deps.Hub))
+				r.Put("/explosion", handleSetExplosion(deps.Hub))
+				r.Put("/explosion-color", handleSetExplosionColor(deps.Hub))
+				r.Put("/alert-sounds", handleSetAlertSounds(deps.Hub))
+				r.Put("/milestone-alerts", handleSaveMilestoneAlerts(deps.Hub))
 				r.Put("/contribution-counts", handleSetContributionCounts(deps.Hub))
 				r.Put("/stat-icons", handleSetStatIcons(deps.Hub))
 				r.Put("/panel-colors", handleSetPanelColors(deps.Hub))
@@ -777,6 +786,58 @@ func handleSaveMoneyMilestones(hub *ws.Hub) http.HandlerFunc {
 	}
 }
 
+// handleGetMilestoneAlerts returns this timer's configured countdown
+// alerts, ordered by remaining time descending. Public, same as
+// /money-milestones: the overlay needs these without a login.
+func handleGetMilestoneAlerts() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		alerts, err := t.MilestoneAlerts()
+		if err != nil {
+			log.Printf("server: load milestone alerts for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to load milestone alerts", http.StatusInternalServerError)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, alerts)
+	}
+}
+
+// handleSaveMilestoneAlerts replaces this timer's countdown alert list
+// wholesale with the submitted list.
+func handleSaveMilestoneAlerts(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var alerts []subathon.MilestoneAlert
+		if err := json.NewDecoder(r.Body).Decode(&alerts); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+		for i, a := range alerts {
+			if a.Hours < 0 || a.Minutes < 0 || a.Minutes > 59 {
+				http.Error(w, "alert time must be a valid hours/minutes value", http.StatusBadRequest)
+				return
+			}
+			if !subathon.IsValidAlertSound(a.Sound) {
+				alerts[i].Sound = subathon.DefaultAlertSound
+			}
+		}
+
+		if err := t.SaveMilestoneAlerts(alerts); err != nil {
+			log.Printf("server: save milestone alerts for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to save milestone alerts", http.StatusInternalServerError)
+			return
+		}
+
+		// Push the bumped Snapshot.AlertsVersion so the overlay refetches
+		// instead of chiming off the old list.
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, alerts)
+	}
+}
+
 var hexColorRE = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // handleSetOverlayColors changes the public overlays' pill colors (both
@@ -867,6 +928,90 @@ func handleSetStatsRotation(hub *ws.Hub) http.HandlerFunc {
 		if err := t.SetStatsRotationEnabled(req.Enabled); err != nil {
 			log.Printf("server: set stats rotation for timer %s: %v", t.ID(), err)
 			http.Error(w, "failed to set stats rotation", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+type setExplosionRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// handleSetExplosion turns the main overlay's "timer explodes" finale
+// animation on or off — see Timer.SetExplosionEnabled.
+func handleSetExplosion(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req setExplosionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := t.SetExplosionEnabled(req.Enabled); err != nil {
+			log.Printf("server: set explosion for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set explosion", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+type setExplosionColorRequest struct {
+	Color string `json:"color"`
+}
+
+// handleSetExplosionColor changes the color of the main overlay's "timer
+// explodes" finale (flash/ring/shards/embers) — see
+// Timer.SetExplosionColor. An empty value falls back to
+// subathon.DefaultExplosionColor.
+func handleSetExplosionColor(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req setExplosionColorRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := t.SetExplosionColor(req.Color); err != nil {
+			log.Printf("server: set explosion color for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set explosion color", http.StatusInternalServerError)
+			return
+		}
+
+		hub.Broadcast(t.ID(), t.Snapshot())
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+type setAlertSoundsRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// handleSetAlertSounds turns the main overlay's countdown alert chime
+// (played client-side at 10/5/1 hours remaining) on or off — see
+// Timer.SetAlertSoundsEnabled.
+func handleSetAlertSounds(hub *ws.Hub) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		var req setAlertSoundsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
+
+		if err := t.SetAlertSoundsEnabled(req.Enabled); err != nil {
+			log.Printf("server: set alert sounds for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to set alert sounds", http.StatusInternalServerError)
 			return
 		}
 

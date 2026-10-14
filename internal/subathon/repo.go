@@ -90,6 +90,22 @@ type TimerRecord struct {
 	DonationsGiven       int
 	StatsRotationEnabled bool
 
+	// ExplosionEnabled turns on the main overlay's "timer explodes" finale
+	// animation, played once the clock reaches 0 — see
+	// Timer.SetExplosionEnabled. Off by default.
+	ExplosionEnabled bool
+
+	// ExplosionColor is the finale's flash/ring/shards/embers color (see
+	// Timer.SetExplosionColor). Empty means not yet customized — callers
+	// layer DefaultExplosionColor on top.
+	ExplosionColor string
+
+	// AlertSoundsEnabled turns on the main overlay's countdown alert
+	// chime, played (client-side) once each time RemainingSecs crosses
+	// down through 10/5/1 hours remaining — see
+	// Timer.SetAlertSoundsEnabled. Off by default.
+	AlertSoundsEnabled bool
+
 	// StatIconStyle/StatIconSubs/StatIconBits/StatIconDonations are the
 	// rotating stat list's per-category icon (see Timer.SetStatIcons) —
 	// StatIconStyle is "emoji" or "svg", and Subs/Bits/Donations hold
@@ -177,6 +193,15 @@ type Repo interface {
 
 	// SaveMoneyMilestones replaces timerID's milestone list wholesale.
 	SaveMoneyMilestones(timerID string, milestones []MoneyMilestone) error
+
+	// MilestoneAlerts returns timerID's configured countdown alerts,
+	// ordered by remaining time descending (the longest-to-go alert
+	// first). Implementations return an empty (not nil-erroring) slice
+	// if none have been saved yet.
+	MilestoneAlerts(timerID string) ([]MilestoneAlert, error)
+
+	// SaveMilestoneAlerts replaces timerID's alert list wholesale.
+	SaveMilestoneAlerts(timerID string, alerts []MilestoneAlert) error
 
 	// ListModerators returns the user IDs of every account with moderator
 	// access to timerID (not including its owner).

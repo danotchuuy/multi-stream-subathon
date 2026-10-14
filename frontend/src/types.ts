@@ -70,6 +70,9 @@ export interface Snapshot {
   hidden: boolean
   /** Bumps whenever the money milestones are saved — see GoalsOverlay. */
   milestonesVersion?: number
+  /** Bumps whenever the countdown alert list is saved — see Overlay's
+   * useMilestoneAlertSounds. */
+  alertsVersion?: number
   /** While true, this timer no longer receives live platform events
    * (Twitch/Kick/StreamElements) or responds to any "!timer ..." chat
    * command — only reachable from the dashboard, never chat. Manual
@@ -99,6 +102,22 @@ export interface Snapshot {
    * donations, far left of the timer/money pills) is turned on. Off by
    * default. */
   statsRotationEnabled: boolean
+
+  /** Whether the main overlay plays a "timer explodes" finale animation
+   * once remainingSecs reaches 0, instead of just sitting at 00:00:00.
+   * Off by default. */
+  explosionEnabled: boolean
+
+  /** Hex color (e.g. "#ff8c00") the finale's flash/ring/shards/embers
+   * are tinted. Always populated (server fills in a default), never
+   * empty. */
+  explosionColor: string
+
+  /** Master on/off switch for the main overlay's countdown alerts
+   * (client-side — see lib/alertSound.ts): while off, none of the
+   * timer's configured MilestoneAlerts play, regardless of the list
+   * itself. Off by default. */
+  alertSoundsEnabled: boolean
 
   /** Which icon the rotating stat list uses per category. Always fully
    * populated (server fills in defaults), never partial. */
@@ -225,6 +244,31 @@ export interface MoneyMilestone {
    * goals overlay replaces it with pulsing dots instead — a "surprise"
    * goal whose amount pill (and reached state) is still visible. */
   hidden: boolean
+}
+
+/** One of the main overlay's built-in countdown alert chimes — see
+ * lib/alertSound.ts's ALERT_SOUND_OPTIONS/playAlertSound, which
+ * synthesize each one client-side. */
+export type AlertSoundKey =
+  | 'chime'
+  | 'alarm'
+  | 'horn'
+  | 'bell'
+  | 'siren'
+  | 'tornadoSiren'
+  | 'trainHorn'
+
+/** One "play a sound when this much time is left" countdown alert for
+ * the main overlay — see GET/PUT /api/timers/{id}/milestone-alerts.
+ * hours/minutes together give the remaining-time mark it fires at (e.g.
+ * hours: 1, minutes: 30 fires at 1h30m left); sound picks which built-in
+ * chime plays. A timer can have any number of these, all gated by the
+ * single Snapshot.alertSoundsEnabled switch rather than each having its
+ * own. */
+export interface MilestoneAlert {
+  hours: number
+  minutes: number
+  sound: AlertSoundKey
 }
 
 export interface Identity {

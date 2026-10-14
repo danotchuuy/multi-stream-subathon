@@ -3,6 +3,7 @@ import type {
   EventType,
   Leaderboard,
   Me,
+  MilestoneAlert,
   Moderator,
   MoneyMilestone,
   MoneyRules,
@@ -267,6 +268,23 @@ export function saveMoneyMilestones(
   })
 }
 
+/** GET a timer's configured countdown alerts, ordered by remaining time
+ * descending. Public, same as getState: the timer ID is the token. */
+export function getMilestoneAlerts(timerId: string): Promise<MilestoneAlert[]> {
+  return request(`/api/timers/${timerId}/milestone-alerts`)
+}
+
+/** Replaces a timer's countdown alert list wholesale. */
+export function saveMilestoneAlerts(
+  timerId: string,
+  alerts: MilestoneAlert[],
+): Promise<MilestoneAlert[]> {
+  return request(`/api/timers/${timerId}/milestone-alerts`, {
+    method: 'PUT',
+    body: JSON.stringify(alerts),
+  })
+}
+
 /** Changes the public overlay's timer/money-goal pill colors (hex, e.g.
  * "#111111"). An empty field falls back to the server's defaults. */
 export function setOverlayColors(
@@ -286,6 +304,43 @@ export function setStatsRotation(
   enabled: boolean,
 ): Promise<Snapshot> {
   return request(`/api/timers/${timerId}/stats-rotation`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+/** Turns the main overlay's "timer explodes" finale animation (played
+ * once remainingSecs reaches 0) on or off. */
+export function setExplosion(
+  timerId: string,
+  enabled: boolean,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/explosion`, {
+    method: 'PUT',
+    body: JSON.stringify({ enabled }),
+  })
+}
+
+/** Changes the color (hex, e.g. "#ff8c00") of the "timer explodes"
+ * finale's flash/ring/shards/embers. An empty value falls back to the
+ * server's default. */
+export function setExplosionColor(
+  timerId: string,
+  color: string,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/explosion-color`, {
+    method: 'PUT',
+    body: JSON.stringify({ color }),
+  })
+}
+
+/** Turns the main overlay's countdown alert chime (played client-side
+ * at 10/5/1 hours remaining) on or off. */
+export function setAlertSounds(
+  timerId: string,
+  enabled: boolean,
+): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/alert-sounds`, {
     method: 'PUT',
     body: JSON.stringify({ enabled }),
   })

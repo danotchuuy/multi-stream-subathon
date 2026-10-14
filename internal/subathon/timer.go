@@ -47,6 +47,19 @@ func DefaultOverlayColors() OverlayColors {
 	}
 }
 
+// DefaultExplosionColor is used until a timer customizes the "timer
+// explodes" finale's color (see Timer.SetExplosionColor) — a warm orange,
+// matching the flash/ring/shards/embers' original fixed color.
+const DefaultExplosionColor = "#ff8c00"
+
+// fillExplosionColor returns c, or DefaultExplosionColor if c is empty.
+func fillExplosionColor(c string) string {
+	if c == "" {
+		return DefaultExplosionColor
+	}
+	return c
+}
+
 // fillOverlayColorDefaults returns c with DefaultOverlayColors filled in
 // for any field left empty.
 func fillOverlayColorDefaults(c OverlayColors) OverlayColors {
@@ -301,6 +314,11 @@ type Snapshot struct {
 	// overlays refetch whenever the value changes.
 	MilestonesVersion int `json:"milestonesVersion"`
 
+	// AlertsVersion is MilestonesVersion's equivalent for the countdown
+	// alert list (see Timer.MilestoneAlerts) — increments each time it's
+	// saved, so the main overlay knows to refetch it.
+	AlertsVersion int `json:"alertsVersion"`
+
 	// OverlayColors customizes the public overlay's timer/money-goal pill
 	// colors — always populated (DefaultOverlayColors until customized),
 	// never the zero value.
@@ -322,6 +340,24 @@ type Snapshot struct {
 	// BitsGiven/DonationsGiven with an icon per category. Off by default
 	// — see Timer.SetStatsRotationEnabled.
 	StatsRotationEnabled bool `json:"statsRotationEnabled"`
+
+	// ExplosionEnabled turns on the main overlay's "timer explodes"
+	// finale animation: once RemainingSecs reaches 0, the timer pill
+	// bursts apart instead of just sitting at 00:00:00. Off by default —
+	// see Timer.SetExplosionEnabled.
+	ExplosionEnabled bool `json:"explosionEnabled"`
+
+	// ExplosionColor is the hex color (e.g. "#ff8c00") the finale's
+	// flash/ring/shards/embers are tinted — always populated
+	// (DefaultExplosionColor until customized), never empty. See
+	// Timer.SetExplosionColor.
+	ExplosionColor string `json:"explosionColor"`
+
+	// AlertSoundsEnabled turns on the main overlay's countdown alert
+	// chime, played (client-side — see frontend lib/alertSound.ts) once
+	// each time RemainingSecs crosses down through 10/5/1 hours
+	// remaining. Off by default — see Timer.SetAlertSoundsEnabled.
+	AlertSoundsEnabled bool `json:"alertSoundsEnabled"`
 
 	// StatIcons customizes each rotating stat list category's icon —
 	// either an emoji or a colorable monochrome SVG icon, see
@@ -367,6 +403,8 @@ type Timer struct {
 	hidden bool
 	// milestonesVersion backs Snapshot.MilestonesVersion.
 	milestonesVersion int
+	// alertsVersion backs Snapshot.AlertsVersion.
+	alertsVersion int
 
 	// ended, when true, means this timer stops receiving live platform
 	// events and no longer responds to any "!timer ..." chat command —
@@ -434,6 +472,18 @@ type Timer struct {
 	// SetStatsRotationEnabled.
 	statsRotationEnabled bool
 
+	// explosionEnabled turns on the overlay's "timer explodes" finale
+	// animation; see SetExplosionEnabled.
+	explosionEnabled bool
+
+	// explosionColor is the finale's flash/ring/shards/embers color;
+	// always populated (see fillExplosionColor), never empty.
+	explosionColor string
+
+	// alertSoundsEnabled turns on the overlay's countdown alert chime;
+	// see SetAlertSoundsEnabled.
+	alertSoundsEnabled bool
+
 	// statIcons customizes each rotating stat list category's icon;
 	// always fully populated (see fillStatIconDefaults), never a zero
 	// value.
@@ -499,6 +549,9 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		bitsGiven:            rec.BitsGiven,
 		donationsGiven:       rec.DonationsGiven,
 		statsRotationEnabled: rec.StatsRotationEnabled,
+		explosionEnabled:     rec.ExplosionEnabled,
+		explosionColor:       fillExplosionColor(rec.ExplosionColor),
+		alertSoundsEnabled:   rec.AlertSoundsEnabled,
 		statIcons: fillStatIconDefaults(StatIcons{
 			Style:     StatIconStyle(rec.StatIconStyle),
 			Outline:   rec.StatIconOutline,
@@ -918,6 +971,61 @@ func (t *Timer) SetStatsRotationEnabled(enabled bool) error {
 	return t.persistLocked()
 }
 
+// ExplosionEnabled reports whether the overlay's "timer explodes" finale
+// animation is turned on for this timer.
+func (t *Timer) ExplosionEnabled() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.explosionEnabled
+}
+
+// SetExplosionEnabled turns the overlay's "timer explodes" finale
+// animation on or off — see Snapshot.ExplosionEnabled.
+func (t *Timer) SetExplosionEnabled(enabled bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.explosionEnabled = enabled
+	return t.persistLocked()
+}
+
+// ExplosionColor returns this timer's configured finale color, with
+// DefaultExplosionColor filled in if unset.
+func (t *Timer) ExplosionColor() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.explosionColor
+}
+
+// SetExplosionColor changes the finale's flash/ring/shards/embers color.
+// An empty value falls back to DefaultExplosionColor.
+func (t *Timer) SetExplosionColor(color string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.explosionColor = fillExplosionColor(color)
+	return t.persistLocked()
+}
+
+// AlertSoundsEnabled reports whether the overlay's countdown alert chime
+// (played client-side at 10/5/1 hours remaining) is turned on for this
+// timer.
+func (t *Timer) AlertSoundsEnabled() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.alertSoundsEnabled
+}
+
+// SetAlertSoundsEnabled turns the overlay's countdown alert chime on or
+// off.
+func (t *Timer) SetAlertSoundsEnabled(enabled bool) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.alertSoundsEnabled = enabled
+	return t.persistLocked()
+}
+
 // SetContributionCounts directly overrides the rotating stat list's three
 // running totals (see Snapshot.SubsGiven), e.g. to reconcile against a
 // count kept elsewhere, backfill totals from before this feature existed
@@ -1219,6 +1327,28 @@ func (t *Timer) SaveMoneyMilestones(milestones []MoneyMilestone) error {
 	return nil
 }
 
+// MilestoneAlerts returns this timer's configured countdown alerts,
+// ordered by remaining time descending.
+func (t *Timer) MilestoneAlerts() ([]MilestoneAlert, error) {
+	alerts, err := t.repo.MilestoneAlerts(t.id)
+	if err != nil {
+		return nil, fmt.Errorf("load milestone alerts: %w", err)
+	}
+	return alerts, nil
+}
+
+// SaveMilestoneAlerts persists this timer's countdown alert list
+// wholesale.
+func (t *Timer) SaveMilestoneAlerts(alerts []MilestoneAlert) error {
+	if err := t.repo.SaveMilestoneAlerts(t.id, alerts); err != nil {
+		return fmt.Errorf("save milestone alerts: %w", err)
+	}
+	t.mu.Lock()
+	t.alertsVersion++
+	t.mu.Unlock()
+	return nil
+}
+
 // Snapshot returns the current state, computing remaining time as of now.
 func (t *Timer) Snapshot() Snapshot {
 	t.mu.RLock()
@@ -1259,6 +1389,7 @@ func (t *Timer) Snapshot() Snapshot {
 		Locked:               t.locked,
 		Hidden:               t.hidden,
 		MilestonesVersion:    t.milestonesVersion,
+		AlertsVersion:        t.alertsVersion,
 		Ended:                t.ended,
 		BoostActive:          boostActive,
 		BoostEndsAt:          boostEndsAt,
@@ -1267,6 +1398,9 @@ func (t *Timer) Snapshot() Snapshot {
 		BitsGiven:            t.bitsGiven,
 		DonationsGiven:       t.donationsGiven,
 		StatsRotationEnabled: t.statsRotationEnabled,
+		ExplosionEnabled:     t.explosionEnabled,
+		ExplosionColor:       t.explosionColor,
+		AlertSoundsEnabled:   t.alertSoundsEnabled,
 		StatIcons:            t.statIcons,
 		PanelColors:          t.panelColors,
 	}
@@ -1317,6 +1451,9 @@ func (t *Timer) persistLocked() error {
 		BitsGiven:                    t.bitsGiven,
 		DonationsGiven:               t.donationsGiven,
 		StatsRotationEnabled:         t.statsRotationEnabled,
+		ExplosionEnabled:             t.explosionEnabled,
+		ExplosionColor:               t.explosionColor,
+		AlertSoundsEnabled:           t.alertSoundsEnabled,
 		StatIconStyle:                string(t.statIcons.Style),
 		StatIconOutline:              t.statIcons.Outline,
 		StatIconSubs:                 t.statIcons.Subs,
