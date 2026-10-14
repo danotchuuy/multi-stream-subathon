@@ -444,6 +444,8 @@ export function addManualEvent(
     secondsAdded: number
     moneyAdded?: number
     amount?: number
+    /** Doubles the time value (manual entries made after a happy hour). */
+    happyHour?: boolean
   },
 ): Promise<Snapshot> {
   return request(`/api/timers/${timerId}/events`, {

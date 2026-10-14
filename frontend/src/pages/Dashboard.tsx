@@ -413,6 +413,7 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   const [tier, setTier] = useState<1 | 2 | 3>(1)
   const [count, setCount] = useState(0)
   const [addTime, setAddTime] = useState(true)
+  const [happyHour, setHappyHour] = useState(false)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -473,9 +474,11 @@ function AddDonationForm({ timerId }: { timerId: string }) {
         secondsAdded: addTime ? seconds : 0,
         moneyAdded: money || undefined,
         amount: count,
+        happyHour: happyHour || undefined,
       })
       setUsername('')
       setCount(0)
+      setHappyHour(false)
       setSaved(true)
     } catch (err) {
       setError(controlErrorMessage(err))
@@ -583,6 +586,17 @@ function AddDonationForm({ timerId }: { timerId: string }) {
           }}
         />
         Add time to timer
+      </label>
+      <label className="checkbox-label">
+        <input
+          type="checkbox"
+          checked={happyHour}
+          onChange={(e) => {
+            setHappyHour(e.target.checked)
+            setSaved(false)
+          }}
+        />
+        Happened during happy hour (2× time)
       </label>
       <button type="submit" disabled={busy || !username.trim() || count <= 0}>
         {saved ? 'Added!' : 'Add donation'}

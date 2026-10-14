@@ -68,6 +68,8 @@ export interface Snapshot {
   /** While true, the public overlay renders nothing instead of the
    * clock. The dashboard always shows it regardless. */
   hidden: boolean
+  /** Bumps whenever the money milestones are saved — see GoalsOverlay. */
+  milestonesVersion?: number
   /** While true, this timer no longer receives live platform events
    * (Twitch/Kick/StreamElements) or responds to any "!timer ..." chat
    * command — only reachable from the dashboard, never chat. Manual

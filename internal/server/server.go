@@ -188,7 +188,7 @@ func New(deps Deps) http.Handler {
 				r.Put("/money-rules", handleSaveMoneyRules())
 				r.Put("/money-goal", handleSetMoneyGoal(deps.Hub))
 				r.Put("/money-raised", handleSetMoneyRaised(deps.Hub))
-				r.Put("/money-milestones", handleSaveMoneyMilestones())
+				r.Put("/money-milestones", handleSaveMoneyMilestones(deps.Hub))
 				r.Put("/overlay-colors", handleSetOverlayColors(deps.Hub))
 				r.Put("/stats-rotation", handleSetStatsRotation(deps.Hub))
 				r.Put("/contribution-counts", handleSetContributionCounts(deps.Hub))
@@ -489,6 +489,10 @@ type addEventRequest struct {
 	SecondsAdded float64 `json:"secondsAdded"`
 	MoneyAdded   float64 `json:"moneyAdded,omitempty"`
 	Amount       float64 `json:"amount,omitempty"`
+	// HappyHour marks a manually added contribution as having happened
+	// during a happy hour, doubling its time value. Skipped while a live
+	// "!timer hh" boost is active, since AddEvent already doubles then.
+	HappyHour bool `json:"happyHour,omitempty"`
 }
 
 // handleAddEvent lets you manually add a contributor event: either a raw
@@ -514,11 +518,16 @@ func handleAddEvent(hub *ws.Hub) http.HandlerFunc {
 			req.Type = subathon.EventManual
 		}
 
+		seconds := int(math.Round(req.SecondsAdded))
+		if boost, _ := t.TimeBoostActive(); req.HappyHour && req.Type != subathon.EventManual && !boost {
+			seconds *= 2
+		}
+
 		err := t.AddEvent(subathon.Event{
 			Platform:     req.Platform,
 			Type:         req.Type,
 			Username:     req.Username,
-			SecondsAdded: int(math.Round(req.SecondsAdded)),
+			SecondsAdded: seconds,
 			MoneyAdded:   req.MoneyAdded,
 			Amount:       req.Amount,
 			AddedBy:      userFromContext(r).DisplayName,
@@ -735,7 +744,7 @@ func handleGetMoneyMilestones() http.HandlerFunc {
 
 // handleSaveMoneyMilestones replaces this timer's milestone list wholesale
 // with the submitted list.
-func handleSaveMoneyMilestones() http.HandlerFunc {
+func handleSaveMoneyMilestones(hub *ws.Hub) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t := timerFromContext(r)
 
@@ -761,6 +770,9 @@ func handleSaveMoneyMilestones() http.HandlerFunc {
 			return
 		}
 
+		// Push the bumped Snapshot.MilestonesVersion so open goals
+		// overlays refetch instead of showing the old list.
+		hub.Broadcast(t.ID(), t.Snapshot())
 		writeJSON(w, http.StatusOK, milestones)
 	}
 }

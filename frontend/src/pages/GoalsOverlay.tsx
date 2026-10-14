@@ -51,7 +51,7 @@ export default function GoalsOverlay() {
     getMoneyMilestones(timerId)
       .then(setMilestones)
       .catch(() => setMilestones([]))
-  }, [timerId])
+  }, [timerId, snapshot?.milestonesVersion])
 
   if (!timerId) {
     return (

@@ -295,6 +295,12 @@ type Snapshot struct {
 	BoostActive bool      `json:"boostActive"`
 	BoostEndsAt time.Time `json:"boostEndsAt,omitempty"`
 
+	// MilestonesVersion increments each time the money milestones are
+	// saved, so a live /goals-overlay knows to refetch them (they aren't
+	// part of the snapshot itself). Resets on restart, which is harmless:
+	// overlays refetch whenever the value changes.
+	MilestonesVersion int `json:"milestonesVersion"`
+
 	// OverlayColors customizes the public overlay's timer/money-goal pill
 	// colors — always populated (DefaultOverlayColors until customized),
 	// never the zero value.
@@ -359,6 +365,8 @@ type Timer struct {
 	// "!timer show" chat command.
 	locked bool
 	hidden bool
+	// milestonesVersion backs Snapshot.MilestonesVersion.
+	milestonesVersion int
 
 	// ended, when true, means this timer stops receiving live platform
 	// events and no longer responds to any "!timer ..." chat command —
@@ -1205,6 +1213,9 @@ func (t *Timer) SaveMoneyMilestones(milestones []MoneyMilestone) error {
 	if err := t.repo.SaveMoneyMilestones(t.id, milestones); err != nil {
 		return fmt.Errorf("save money milestones: %w", err)
 	}
+	t.mu.Lock()
+	t.milestonesVersion++
+	t.mu.Unlock()
 	return nil
 }
 
@@ -1247,6 +1258,7 @@ func (t *Timer) Snapshot() Snapshot {
 		MoneyGoal:            t.moneyGoal,
 		Locked:               t.locked,
 		Hidden:               t.hidden,
+		MilestonesVersion:    t.milestonesVersion,
 		Ended:                t.ended,
 		BoostActive:          boostActive,
 		BoostEndsAt:          boostEndsAt,
