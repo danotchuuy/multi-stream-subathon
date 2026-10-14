@@ -25,6 +25,10 @@ const (
 	PlatformTwitch  Platform = "twitch"
 	PlatformKick    Platform = "kick"
 	PlatformYouTube Platform = "youtube"
+	// PlatformDev is the dummy identity behind DEV_LOGIN's
+	// /auth/dev/login (see internal/server's handleDevLogin) — local
+	// development/testing only, never a real streaming account.
+	PlatformDev Platform = "dev"
 )
 
 // User is an account, created the first time someone logs in via any

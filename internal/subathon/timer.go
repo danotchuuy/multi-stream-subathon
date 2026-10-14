@@ -5,6 +5,7 @@ package subathon
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 
@@ -301,12 +302,14 @@ type Snapshot struct {
 	// dashboard, never chat.
 	Ended bool `json:"ended"`
 
-	// BoostActive/BoostEndsAt reflect a "!timer hh <duration>"/dashboard
-	// "Start Happy Hour" time-doubling boost (see Timer.StartTimeBoost) —
-	// BoostActive is false (and BoostEndsAt the zero value, omitted) once
-	// it's expired, not just while none has ever been started.
-	BoostActive bool      `json:"boostActive"`
-	BoostEndsAt time.Time `json:"boostEndsAt,omitempty"`
+	// BoostActive/BoostEndsAt/BoostMultiplier reflect a "!timer hh
+	// <duration> [multiplier]"/dashboard "Start Happy Hour" time boost (see
+	// Timer.StartTimeBoost) — BoostActive is false (and BoostEndsAt the
+	// zero value, omitted) once it's expired, not just while none has ever
+	// been started. BoostMultiplier is the last boost's multiplier.
+	BoostActive     bool      `json:"boostActive"`
+	BoostEndsAt     time.Time `json:"boostEndsAt,omitempty"`
+	BoostMultiplier float64   `json:"boostMultiplier"`
 
 	// MilestonesVersion increments each time the money milestones are
 	// saved, so a live /goals-overlay knows to refetch them (they aren't
@@ -411,11 +414,13 @@ type Timer struct {
 	// see SetEnded. Dashboard-only: there is no chat command for it.
 	ended bool
 
-	// boostEndsAt is when a "!timer hh <duration>" time-doubling boost
-	// expires — the zero value (or a time already in the past) means none
-	// is active. While active, AddEvent doubles SecondsAdded for every
-	// non-manual event (see StartTimeBoost/TimeBoostActive).
-	boostEndsAt time.Time
+	// boostEndsAt is when a "!timer hh <duration>" time boost expires —
+	// the zero value (or a time already in the past) means none is
+	// active. While active, AddEvent multiplies SecondsAdded by
+	// boostMultiplier for every non-manual event (see StartTimeBoost/
+	// TimeBoostActive).
+	boostEndsAt     time.Time
+	boostMultiplier float64
 
 	// totalMoneyRaised/moneyGoal mirror totalAdded/the clock, but for
 	// money: totalMoneyRaised accumulates every event's MoneyAdded;
@@ -521,6 +526,7 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		hidden:                       rec.Hidden,
 		ended:                        rec.Ended,
 		boostEndsAt:                  rec.BoostEndsAt,
+		boostMultiplier:              normalizeBoostMultiplier(rec.BoostMultiplier),
 		totalMoneyRaised:             rec.TotalMoneyRaised,
 		moneyGoal:                    rec.MoneyGoal,
 		twitchBroadcasterID:          rec.TwitchBroadcasterID,
@@ -905,8 +911,8 @@ func (t *Timer) TimeBoostEndsAt() time.Time {
 	return t.boostEndsAt
 }
 
-// TimeBoostActive reports whether a "!timer hh <duration>" time-doubling
-// boost (see StartTimeBoost) is currently active, and if so, when it ends.
+// TimeBoostActive reports whether a "!timer hh <duration>" time boost
+// (see StartTimeBoost) is currently active, and if so, when it ends.
 func (t *Timer) TimeBoostActive() (active bool, endsAt time.Time) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -917,21 +923,56 @@ func (t *Timer) TimeBoostActive() (active bool, endsAt time.Time) {
 	return true, t.boostEndsAt
 }
 
-// StartTimeBoost begins (or extends/replaces) a time-doubling boost that
-// lasts for d: every non-manual contribution AddEvent records while it's
-// active has its SecondsAdded doubled before it's applied to the clock and
-// recorded to history (see AddEvent) — triggered by a channel moderator or
-// the streamer's own "!timer hh <duration>" chat command (see
-// twitch.chatCommandNames and internal/server/twitch_webhook.go's
-// handleHHCommand), never by an ordinary viewer. Passing a shorter d than
-// an already-active boost's remaining time still shortens it — this
-// always sets the expiry outright rather than only ever extending it.
-func (t *Timer) StartTimeBoost(d time.Duration) error {
+// DefaultBoostMultiplier is the time boost multiplier used when none is
+// given (or an invalid one is), i.e. double time.
+const DefaultBoostMultiplier = 2.0
+
+// MaxBoostMultiplier caps a time boost's multiplier, e.g. against a typo
+// like "!timer hh 30m 100".
+const MaxBoostMultiplier = 10.0
+
+// normalizeBoostMultiplier maps an unset/invalid multiplier (<= 1, which
+// wouldn't boost anything) to DefaultBoostMultiplier and caps it at
+// MaxBoostMultiplier.
+func normalizeBoostMultiplier(m float64) float64 {
+	if m <= 1 || math.IsNaN(m) {
+		return DefaultBoostMultiplier
+	}
+	return min(m, MaxBoostMultiplier)
+}
+
+// ApplyBoostMultiplier multiplies seconds by multiplier (normalized via
+// normalizeBoostMultiplier), rounding to the nearest second.
+func ApplyBoostMultiplier(seconds int, multiplier float64) int {
+	return int(math.Round(float64(seconds) * normalizeBoostMultiplier(multiplier)))
+}
+
+// StartTimeBoost begins (or extends/replaces) a time boost that lasts for
+// d: every non-manual contribution AddEvent records while it's active has
+// its SecondsAdded multiplied by multiplier (see normalizeBoostMultiplier —
+// e.g. 0 means DefaultBoostMultiplier) before it's applied to the clock
+// and recorded to history (see AddEvent) — triggered by a channel
+// moderator or the streamer's own "!timer hh <duration> [multiplier]" chat
+// command (see twitch.chatCommandNames and internal/server/
+// twitch_webhook.go's handleHHCommand), never by an ordinary viewer.
+// Passing a shorter d than an already-active boost's remaining time still
+// shortens it — this always sets the expiry (and multiplier) outright
+// rather than only ever extending it.
+func (t *Timer) StartTimeBoost(d time.Duration, multiplier float64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	t.boostEndsAt = time.Now().Add(d)
+	t.boostMultiplier = normalizeBoostMultiplier(multiplier)
 	return t.persistLocked()
+}
+
+// TimeBoostMultiplier returns the multiplier StartTimeBoost last set
+// (DefaultBoostMultiplier if none has ever been started).
+func (t *Timer) TimeBoostMultiplier() float64 {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.boostMultiplier
 }
 
 // OverlayColors returns this timer's configured overlay pill colors, with
@@ -1128,12 +1169,12 @@ func (t *Timer) AddEvent(e Event) error {
 		e.Occurred = time.Now()
 	}
 
-	// A "!timer hh <duration>" boost (see StartTimeBoost) doubles every
+	// A "!timer hh <duration>" boost (see StartTimeBoost) multiplies every
 	// real contribution's time value while active — EventManual is
 	// excluded since it's the dashboard's raw "Add test event" tool, not
 	// an actual tracked reward item (see rewards.go's RewardItems).
 	if e.Type != EventManual && e.SecondsAdded > 0 && !t.boostEndsAt.IsZero() && time.Now().Before(t.boostEndsAt) {
-		e.SecondsAdded *= 2
+		e.SecondsAdded = ApplyBoostMultiplier(e.SecondsAdded, t.boostMultiplier)
 	}
 
 	if !t.locked {
@@ -1393,6 +1434,7 @@ func (t *Timer) Snapshot() Snapshot {
 		Ended:                t.ended,
 		BoostActive:          boostActive,
 		BoostEndsAt:          boostEndsAt,
+		BoostMultiplier:      t.boostMultiplier,
 		OverlayColors:        t.overlayColors,
 		SubsGiven:            t.subsGiven,
 		BitsGiven:            t.bitsGiven,
@@ -1428,6 +1470,7 @@ func (t *Timer) persistLocked() error {
 		Hidden:                       t.hidden,
 		Ended:                        t.ended,
 		BoostEndsAt:                  t.boostEndsAt,
+		BoostMultiplier:              t.boostMultiplier,
 		TwitchBroadcasterID:          t.twitchBroadcasterID,
 		TwitchBroadcasterUsername:    t.twitchBroadcasterUsername,
 		KickBroadcasterID:            t.kickBroadcasterID,

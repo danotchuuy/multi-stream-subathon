@@ -333,6 +333,102 @@ a {
   grid-template-columns: 1fr 1fr;
 }
 
+/* Timer dashboard (Dashboard.tsx): wider than the default .dashboard so
+   its controls can sit in three independent columns (Clock /
+   Contributions / Connections). Each column stacks its own boxes at
+   their natural height — unlike .controls' shared grid rows, where a
+   short box stretched to match a tall neighbor and left empty space. */
+.dashboard-main {
+  max-width: 1280px;
+}
+
+/* Clock card beside the overlay URLs on wide screens. */
+.dashboard-top {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 16px;
+  align-items: start;
+  margin-top: 16px;
+}
+
+.dashboard-top .clock-card,
+.dashboard-top .overlay-link {
+  margin-top: 0;
+}
+
+.dashboard-top .overlay-link {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dashboard-columns {
+  margin-top: 24px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.dashboard-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.dashboard-column-heading {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+/* Inputs inside a dashboard column never push their box wider than
+   the column. */
+.dashboard-column input,
+.dashboard-column select {
+  max-width: 100%;
+  min-width: 0;
+}
+
+.control-group-compact input[type='number'],
+.control-inline input[type='number'] {
+  width: 90px;
+}
+
+/* A wrapping row of fields + button inside a stacked control-group. */
+.control-inline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.control-toggle-wide {
+  max-width: none;
+}
+
+@media (max-width: 1080px) {
+  .dashboard-columns {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .dashboard-top,
+  .dashboard-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dashboard-main header {
+    flex-wrap: wrap;
+    gap: 8px 12px;
+  }
+}
+
 .control-group {
   display: flex;
   flex-wrap: wrap;
@@ -645,6 +741,7 @@ a {
 
 .events-header {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
@@ -669,8 +766,9 @@ a {
 
 .events li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
+  gap: 6px 12px;
   padding: 10px 14px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -1272,4 +1370,49 @@ footer {
 
 .styling-panel-preview .panel-categories {
   max-width: none;
+}
+
+/* A two-column form grid (e.g. the dashboard's "Add donation" form):
+   fields pair up side by side instead of control-group's flex-wrap,
+   which bottom-aligns rows unevenly; checkboxes, hints, the submit
+   button, and errors span both columns. */
+.control-group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 10px 12px;
+}
+
+.control-group-grid > .checkbox-label,
+.control-group-grid > .control-hint,
+.control-group-grid > .error-message,
+.control-group-grid > button {
+  grid-column: 1 / -1;
+}
+
+.control-group-grid > button {
+  justify-self: start;
+}
+
+.control-group-grid input:not([type='checkbox']),
+.control-group-grid select {
+  width: 100%;
+}
+
+.control-inline > input[type='text'] {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-main header {
+  justify-content: flex-start;
+  gap: 24px;
+}
+
+.dashboard-main header > div:first-child {
+  margin-right: 24px;
+}
+
+.dashboard-main header > .status {
+  margin-left: auto;
 }

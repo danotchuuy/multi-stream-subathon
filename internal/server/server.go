@@ -96,6 +96,10 @@ type Deps struct {
 	// so the Go API can still run standalone behind the Vite dev server
 	// during local development.
 	UIDistDir string
+
+	// DevLogin mounts GET /auth/dev/login (see handleDevLogin). Local
+	// development/testing only — see config.Config.DevLogin.
+	DevLogin bool
 }
 
 // New builds the router: auth (OAuth login/link, session, /api/me), REST
@@ -499,9 +503,12 @@ type addEventRequest struct {
 	MoneyAdded   float64 `json:"moneyAdded,omitempty"`
 	Amount       float64 `json:"amount,omitempty"`
 	// HappyHour marks a manually added contribution as having happened
-	// during a happy hour, doubling its time value. Skipped while a live
-	// "!timer hh" boost is active, since AddEvent already doubles then.
-	HappyHour bool `json:"happyHour,omitempty"`
+	// during a happy hour, multiplying its time value by
+	// HappyHourMultiplier (omitted/0 means subathon.DefaultBoostMultiplier).
+	// Skipped while a live "!timer hh" boost is active, since AddEvent
+	// already applies that boost's multiplier then.
+	HappyHour           bool    `json:"happyHour,omitempty"`
+	HappyHourMultiplier float64 `json:"happyHourMultiplier,omitempty"`
 }
 
 // handleAddEvent lets you manually add a contributor event: either a raw
@@ -529,7 +536,7 @@ func handleAddEvent(hub *ws.Hub) http.HandlerFunc {
 
 		seconds := int(math.Round(req.SecondsAdded))
 		if boost, _ := t.TimeBoostActive(); req.HappyHour && req.Type != subathon.EventManual && !boost {
-			seconds *= 2
+			seconds = subathon.ApplyBoostMultiplier(seconds, req.HappyHourMultiplier)
 		}
 
 		err := t.AddEvent(subathon.Event{

@@ -67,6 +67,13 @@ type Config struct {
 	// every other integration above, so this only matters if Throne
 	// rotates its key before this app is updated to match.
 	ThroneWebhookPublicKey string
+
+	// DevLogin enables GET /auth/dev/login, which signs in as a dummy
+	// account without any OAuth provider — for local development and
+	// automated UI testing (e.g. headless browser screenshots) only.
+	// cmd/server refuses to start with this on when PublicBaseURL is
+	// https://, so it can't be left enabled on a real deployment.
+	DevLogin bool
 }
 
 // OAuthAppConfig holds one platform's registered OAuth app credentials.
@@ -129,6 +136,7 @@ func Load() Config {
 		TwitchWebhookSecret:      getEnv("TWITCH_WEBHOOK_SECRET", ""),
 		TwitchWebhookCallbackURL: publicBaseURL + "/webhooks/twitch",
 		ThroneWebhookPublicKey:   getEnv("THRONE_WEBHOOK_PUBLIC_KEY", ""),
+		DevLogin:                 getEnvBool("DEV_LOGIN", false),
 	}
 }
 

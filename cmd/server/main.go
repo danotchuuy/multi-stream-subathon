@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -119,6 +120,13 @@ func main() {
 		log.Fatalf("build throne client: %v", err)
 	}
 
+	if cfg.DevLogin {
+		if strings.HasPrefix(cfg.PublicBaseURL, "https://") {
+			log.Fatalf("DEV_LOGIN must not be enabled when PUBLIC_BASE_URL is https:// (%s) — it lets anyone sign in without credentials", cfg.PublicBaseURL)
+		}
+		log.Printf("WARNING: DEV_LOGIN is enabled — anyone who can reach this server can sign in via /auth/dev/login")
+	}
+
 	router := server.New(server.Deps{
 		Manager:              manager,
 		Hub:                  hub,
@@ -136,6 +144,7 @@ func main() {
 		AllowedOrigin:        cfg.AllowedOrigin,
 		CookieSecure:         cfg.CookieSecure,
 		UIDistDir:            cfg.UIDistDir,
+		DevLogin:             cfg.DevLogin,
 	})
 	httpServer := &http.Server{
 		Addr:    cfg.Addr,

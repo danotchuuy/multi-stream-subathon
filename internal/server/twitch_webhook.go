@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -353,24 +355,58 @@ func applyChatCommand(t *subathon.Timer, name string) error {
 // double contributions for, e.g. against a typo like "!timer hh 300h".
 const maxHHDuration = 24 * time.Hour
 
-// handleHHCommand implements "!timer hh <duration>" (e.g. "!timer hh
-// 30m") — parses the duration and hands off to startHappyHour, the same
-// entry point the dashboard's "Start Happy Hour" control uses (see
+// handleHHCommand implements "!timer hh <duration> [multiplier]" (e.g.
+// "!timer hh 30m" or "!timer hh 30m 3x") — parses the duration and
+// optional multiplier (see parseHHArgs; defaults to
+// subathon.DefaultBoostMultiplier) and hands off to startHappyHour, the
+// same entry point the dashboard's "Start Happy Hour" control uses (see
 // handleStartHappyHour), just reached from chat instead of an HTTP request.
 func handleHHCommand(deps Deps, t *subathon.Timer, cmd twitch.ChatCommand) {
-	d, err := time.ParseDuration(cmd.Arg)
-	if err != nil || d <= 0 {
-		log.Printf("twitch: !timer hh (from %s) on timer %s: invalid duration %q", cmd.Username, t.ID(), cmd.Arg)
+	d, multiplier, err := parseHHArgs(cmd.Arg)
+	if err != nil {
+		log.Printf("twitch: !timer hh (from %s) on timer %s: %v", cmd.Username, t.ID(), err)
 		return
 	}
 
-	if err := startHappyHour(deps, t, cmd.BroadcasterUserID, d); err != nil {
+	if err := startHappyHour(deps, t, cmd.BroadcasterUserID, d, multiplier); err != nil {
 		log.Printf("twitch: start time boost (from %s) on timer %s: %v", cmd.Username, t.ID(), err)
 	}
 }
 
-// startHappyHour starts a time-doubling boost on t (see subathon.Timer.
-// StartTimeBoost, capped at maxHHDuration), announces it in
+// parseHHArgs parses "!timer hh"'s arguments: a required positive
+// duration (e.g. "30m") followed by an optional multiplier greater than 1,
+// written with or without a trailing "x" (e.g. "3", "3x", "1.5x"). A
+// missing multiplier is returned as subathon.DefaultBoostMultiplier.
+func parseHHArgs(arg string) (d time.Duration, multiplier float64, err error) {
+	fields := strings.Fields(arg)
+	if len(fields) == 0 || len(fields) > 2 {
+		return 0, 0, fmt.Errorf("invalid arguments %q", arg)
+	}
+	d, err = time.ParseDuration(fields[0])
+	if err != nil || d <= 0 {
+		return 0, 0, fmt.Errorf("invalid duration %q", fields[0])
+	}
+
+	multiplier = subathon.DefaultBoostMultiplier
+	if len(fields) == 2 {
+		raw := strings.TrimSuffix(strings.ToLower(fields[1]), "x")
+		multiplier, err = strconv.ParseFloat(raw, 64)
+		if err != nil || multiplier <= 1 || math.IsNaN(multiplier) || math.IsInf(multiplier, 0) {
+			return 0, 0, fmt.Errorf("invalid multiplier %q", fields[1])
+		}
+	}
+	return d, multiplier, nil
+}
+
+// formatMultiplier renders a boost multiplier for chat, e.g. "2x" or
+// "1.5x".
+func formatMultiplier(m float64) string {
+	return strconv.FormatFloat(m, 'f', -1, 64) + "x"
+}
+
+// startHappyHour starts a time boost on t multiplying contributions by
+// multiplier (see subathon.Timer.StartTimeBoost, capped at maxHHDuration
+// and subathon.MaxBoostMultiplier), announces it in
 // broadcasterID's chat using the timer owner's own Twitch account (see
 // announceAsOwner), and schedules a matching "it's over" announcement for
 // when it expires (see announceTimeBoostEnd) — shared by the "!timer hh
@@ -378,12 +414,12 @@ func handleHHCommand(deps Deps, t *subathon.Timer, cmd twitch.ChatCommand) {
 // Happy Hour" control (handleStartHappyHour). broadcasterID empty (e.g. the
 // timer has no Twitch channel configured) skips both announcements but
 // still starts the boost itself.
-func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.Duration) error {
+func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.Duration, multiplier float64) error {
 	if d > maxHHDuration {
 		d = maxHHDuration
 	}
 
-	if err := t.StartTimeBoost(d); err != nil {
+	if err := t.StartTimeBoost(d, multiplier); err != nil {
 		return fmt.Errorf("start time boost: %w", err)
 	}
 	endsAt := t.TimeBoostEndsAt()
@@ -394,7 +430,12 @@ func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.D
 	}
 
 	minutes := int(d.Round(time.Minute) / time.Minute)
-	startMessage := fmt.Sprintf("⏱️ Happy Hour! Time contributions are DOUBLED for the next %d minutes!", minutes)
+	var startMessage string
+	if m := t.TimeBoostMultiplier(); m == 2 {
+		startMessage = fmt.Sprintf("⏱️ Happy Hour! Time contributions are DOUBLED for the next %d minutes!", minutes)
+	} else {
+		startMessage = fmt.Sprintf("⏱️ Happy Hour! Time contributions are worth %s for the next %d minutes!", formatMultiplier(m), minutes)
+	}
 	if err := announceAsOwner(deps, t, broadcasterID, startMessage); err != nil {
 		log.Printf("twitch: announce time boost start on timer %s: %v", t.ID(), err)
 	}
@@ -409,9 +450,12 @@ func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.D
 }
 
 type startHappyHourRequest struct {
-	// DurationSeconds is how long to double time contributions for, e.g.
+	// DurationSeconds is how long to boost time contributions for, e.g.
 	// 1800 for 30 minutes.
 	DurationSeconds int `json:"durationSeconds"`
+	// Multiplier is how much to multiply time contributions by, e.g. 3
+	// for triple time. Omitted (0) means subathon.DefaultBoostMultiplier.
+	Multiplier float64 `json:"multiplier,omitempty"`
 }
 
 // handleStartHappyHour is the dashboard's "Start Happy Hour" control —
@@ -433,9 +477,16 @@ func handleStartHappyHour(deps Deps) http.HandlerFunc {
 			http.Error(w, "durationSeconds must be positive", http.StatusBadRequest)
 			return
 		}
+		if req.Multiplier == 0 {
+			req.Multiplier = subathon.DefaultBoostMultiplier
+		}
+		if req.Multiplier <= 1 || req.Multiplier > subathon.MaxBoostMultiplier {
+			http.Error(w, fmt.Sprintf("multiplier must be greater than 1 and at most %g", subathon.MaxBoostMultiplier), http.StatusBadRequest)
+			return
+		}
 
 		broadcasterID, _ := t.TwitchChannel()
-		if err := startHappyHour(deps, t, broadcasterID, time.Duration(req.DurationSeconds)*time.Second); err != nil {
+		if err := startHappyHour(deps, t, broadcasterID, time.Duration(req.DurationSeconds)*time.Second, req.Multiplier); err != nil {
 			log.Printf("server: start happy hour for timer %s: %v", t.ID(), err)
 			http.Error(w, "failed to start happy hour", http.StatusInternalServerError)
 			return

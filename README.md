@@ -602,6 +602,7 @@ deployment — everything else has a sensible default or derives from it.
 | `DB_PATH` | `data/subathon.db` | SQLite database file path (create the dir via a volume) |
 | `UI_DIST_DIR` | *(unset — static serving disabled)* | Path to the built frontend (`frontend/dist`); serving is skipped locally since Vite's dev server handles the UI instead. Baked into the Docker image — see Dockerfile |
 | `COOKIE_SECURE` | *(`true` iff `PUBLIC_BASE_URL` is `https://`)* | Mark the session cookie HTTPS-only; set `true` once served over TLS |
+| `DEV_LOGIN` | `false` | **Local development/testing only.** Enables `GET /auth/dev/login?username=<name>&redirect=<path>`, which signs in as a dummy account (default `devuser`; same name → same account) with no OAuth provider — handy for headless-browser screenshots. The server refuses to start with this on if `PUBLIC_BASE_URL` is `https://` |
 
 **Twitch**
 

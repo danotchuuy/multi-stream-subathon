@@ -414,6 +414,7 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   const [count, setCount] = useState(0)
   const [addTime, setAddTime] = useState(true)
   const [happyHour, setHappyHour] = useState(false)
+  const [happyHourMultiplier, setHappyHourMultiplier] = useState(2)
   const [busy, setBusy] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -475,6 +476,7 @@ function AddDonationForm({ timerId }: { timerId: string }) {
         moneyAdded: money || undefined,
         amount: count,
         happyHour: happyHour || undefined,
+        happyHourMultiplier: happyHour ? happyHourMultiplier : undefined,
       })
       setUsername('')
       setCount(0)
@@ -488,7 +490,7 @@ function AddDonationForm({ timerId }: { timerId: string }) {
   }
 
   return (
-    <form className="control-group" onSubmit={handleSubmit}>
+    <form className="control-group control-group-grid" onSubmit={handleSubmit}>
       <label>
         Donor username
         <input
@@ -596,9 +598,32 @@ function AddDonationForm({ timerId }: { timerId: string }) {
             setSaved(false)
           }}
         />
-        Happened during happy hour (2× time)
+        Happened during happy hour
       </label>
-      <button type="submit" disabled={busy || !username.trim() || count <= 0}>
+      <label>
+        Happy hour multiplier
+        <input
+          type="number"
+          min={1.1}
+          max={10}
+          step={0.5}
+          value={happyHourMultiplier}
+          disabled={!happyHour}
+          onChange={(e) => {
+            setHappyHourMultiplier(Number(e.target.value))
+            setSaved(false)
+          }}
+        />
+      </label>
+      <button
+        type="submit"
+        disabled={
+          busy ||
+          !username.trim() ||
+          count <= 0 ||
+          (happyHour && !validHappyHourMultiplier(happyHourMultiplier))
+        }
+      >
         {saved ? 'Added!' : 'Add donation'}
       </button>
       {error && <p className="error-message">{error}</p>}
@@ -933,7 +958,7 @@ function ModeratorsSection({
   }
 
   return (
-    <div className="control-group">
+    <div className="control-group control-group-stacked">
       <label>Moderators</label>
       {moderators === null ? (
         <p className="empty">Loading…</p>
@@ -958,7 +983,7 @@ function ModeratorsSection({
         </ul>
       )}
       {isOwner && (
-        <form onSubmit={handleAdd}>
+        <form className="control-inline" onSubmit={handleAdd}>
           <input
             type="text"
             value={usernameInput}
@@ -982,9 +1007,15 @@ function secondsUntil(isoTime: string): number {
   return Math.max(0, (new Date(isoTime).getTime() - Date.now()) / 1000)
 }
 
+/** Whether multiplier is one the server accepts for a happy hour (more
+ * than 1×, at most 10×). */
+function validHappyHourMultiplier(multiplier: number): boolean {
+  return multiplier > 1 && multiplier <= 10
+}
+
 /** "Start Happy Hour" control: the dashboard's equivalent of a channel
- * moderator's "!timer hh <duration>" chat command — doubles time
- * contributions for a chosen duration and announces it in that timer's
+ * moderator's "!timer hh <duration> [multiplier]" chat command —
+ * multiplies time contributions (2× by default) for a chosen duration and announces it in that timer's
  * Twitch chat using the streamer's own account (see api.startHappyHour).
  * boostActive/boostEndsAt come straight off the live snapshot, which
  * ticks every second, so the "ends in ..." countdown here updates on its
@@ -992,31 +1023,37 @@ function secondsUntil(isoTime: string): number {
 function HappyHourForm({
   minutes,
   onMinutesChange,
+  multiplier,
+  onMultiplierChange,
   onStart,
   busy,
   boostActive,
   boostEndsAt,
+  boostMultiplier,
 }: {
   minutes: number
   onMinutesChange: (minutes: number) => void
+  multiplier: number
+  onMultiplierChange: (multiplier: number) => void
   onStart: () => Promise<void>
   busy: boolean
   boostActive: boolean
   boostEndsAt?: string
+  boostMultiplier?: number
 }) {
   return (
     <div className="control-group control-group-stacked">
-      <div className="control-row">
-        <div className="control-toggle">
-          <span className={`status ${boostActive ? 'status-ok' : ''}`}>
-            {boostActive ? '🔥 Happy Hour active' : 'Happy Hour'}
-          </span>
-          <span className="control-hint">
-            {boostActive && boostEndsAt
-              ? `Time contributions doubled — ends in ${formatDuration(secondsUntil(boostEndsAt))}`
-              : 'Doubles time contributions for a limited window, announced in Twitch chat'}
-          </span>
-        </div>
+      <div className="control-toggle control-toggle-wide">
+        <span className={`status ${boostActive ? 'status-ok' : ''}`}>
+          {boostActive ? '🔥 Happy Hour active' : 'Happy Hour'}
+        </span>
+        <span className="control-hint">
+          {boostActive && boostEndsAt
+            ? `Time contributions ${boostMultiplier ?? 2}× — ends in ${formatDuration(secondsUntil(boostEndsAt))}`
+            : 'Multiplies time contributions for a limited window, announced in Twitch chat'}
+        </span>
+      </div>
+      <div className="control-inline">
         <label>
           Minutes
           <input
@@ -1026,7 +1063,18 @@ function HappyHourForm({
             onChange={(e) => onMinutesChange(Number(e.target.value))}
           />
         </label>
-        <button onClick={onStart} disabled={busy}>
+        <label>
+          Multiplier
+          <input
+            type="number"
+            min={1.1}
+            max={10}
+            step={0.5}
+            value={multiplier}
+            onChange={(e) => onMultiplierChange(Number(e.target.value))}
+          />
+        </label>
+        <button onClick={onStart} disabled={busy || !validHappyHourMultiplier(multiplier)}>
           Start Happy Hour
         </button>
       </div>
@@ -1052,6 +1100,7 @@ export default function Dashboard() {
   const { snapshot, connected } = useSubathon(timerId)
   const [initialMinutes, setInitialMinutes] = useState(60)
   const [happyHourMinutes, setHappyHourMinutes] = useState(30)
+  const [happyHourMultiplier, setHappyHourMultiplier] = useState(2)
   const [username, setUsername] = useState('')
   const [secondsAdded, setSecondsAdded] = useState(60)
   const [moneyAdded, setMoneyAdded] = useState(0)
@@ -1132,14 +1181,15 @@ export default function Dashboard() {
   }
 
   // Starts a "Happy Hour": the dashboard's equivalent of a channel
-  // moderator's "!timer hh <duration>" chat command — doubles time
-  // contributions for happyHourMinutes and announces it on this timer's
+  // moderator's "!timer hh <duration> [multiplier]" chat command —
+  // multiplies time contributions by happyHourMultiplier for
+  // happyHourMinutes and announces it on this timer's
   // configured Twitch channel (if any), using the streamer's own account.
   const handleStartHappyHour = async () => {
     setBusy(true)
     setError(null)
     try {
-      await startHappyHour(timerId, happyHourMinutes * 60)
+      await startHappyHour(timerId, happyHourMinutes * 60, happyHourMultiplier)
     } catch (err) {
       setError(controlErrorMessage(err))
     } finally {
@@ -1216,7 +1266,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="dashboard">
+    <div className="dashboard dashboard-main">
       <header>
         <div>
           <Link to="/" className="back-link">
@@ -1240,236 +1290,248 @@ export default function Dashboard() {
 
       {error && <p className="error-message">{error}</p>}
 
-      <section className="clock-card">
-        <div className="clock">
-          {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
-        </div>
-        <div className="clock-meta">
-          {snapshot?.running ? 'running' : 'stopped'} &middot; total added:{' '}
-          {snapshot ? formatDuration(snapshot.totalAddedSecs) : '--:--:--'}
-        </div>
-        {snapshot &&
-          (snapshot.totalMoneyRaised > 0 ||
-            snapshot.moneyGoal ||
-            milestones.length > 0) && (
-          <div className="money-progress">
-            <div className="clock-meta">
-              ${formatMoney(snapshot.totalMoneyRaised)} raised
-              {snapshot.moneyGoal
-                ? ` of $${formatMoney(snapshot.moneyGoal)} goal`
-                : ''}
+      <div className="dashboard-top">
+        <section className="clock-card">
+          <div className="clock">
+            {snapshot ? formatDuration(snapshot.remainingSecs) : '--:--:--'}
+          </div>
+          <div className="clock-meta">
+            {snapshot?.running ? 'running' : 'stopped'} &middot; total added:{' '}
+            {snapshot ? formatDuration(snapshot.totalAddedSecs) : '--:--:--'}
+          </div>
+          {snapshot &&
+            (snapshot.totalMoneyRaised > 0 ||
+              snapshot.moneyGoal ||
+              milestones.length > 0) && (
+            <div className="money-progress">
+              <div className="clock-meta">
+                ${formatMoney(snapshot.totalMoneyRaised)} raised
+                {snapshot.moneyGoal
+                  ? ` of $${formatMoney(snapshot.moneyGoal)} goal`
+                  : ''}
+              </div>
+              <MilestonesList
+                milestones={milestones}
+                totalMoneyRaised={snapshot.totalMoneyRaised}
+              />
             </div>
-            <MilestonesList
-              milestones={milestones}
-              totalMoneyRaised={snapshot.totalMoneyRaised}
-            />
-          </div>
-        )}
-      </section>
+          )}
+        </section>
 
-      <section className="overlay-link">
-        <label>
-          Overlay URL (add as an OBS browser source)
-          <div className="overlay-link-row">
-            <input type="text" readOnly value={overlayUrl} />
-            <button type="button" onClick={handleCopyOverlayUrl}>
-              {copied ? 'Copied!' : 'Copy'}
-            </button>
-          </div>
-        </label>
-        <OverlayUrlField
-          label="Goals overlay URL (a separate OBS browser source for the milestone list)"
-          url={goalsOverlayUrl}
-        />
-        <OverlayUrlField
-          label="Leaderboard panel URL (top 10 subs/bits/tips — screenshot for a Twitch panel image, or use as its own OBS browser source)"
-          url={panelUrl}
-        />
-      </section>
-
-      <section className="controls">
-        {snapshot && (
-          <>
-            <TwitchChannelSelect
-              initialUsername={snapshot.twitchChannel ?? ''}
-              onSave={(username) => setTwitchChannel(timerId, username)}
-            />
-            <ChannelForm
-              label="Kick channel to watch"
-              placeholder="channel slug, e.g. xqc"
-              initialUsername={snapshot.kickChannel ?? ''}
-              onSave={(username) => setKickChannel(timerId, username)}
-            />
-            <YouTubeChannelSelect
-              initialChannel={snapshot.youtubeChannel ?? ''}
-              initialChannelId={snapshot.youtubeChannelId ?? ''}
-              onSave={(channelId) => setYouTubeChannel(timerId, channelId)}
-            />
-            <StreamElementsForm timerId={timerId} />
-            <form className="control-group" onSubmit={handleAddEvent}>
-              <label>
-                Test event: username
-                <input
-                  type="text"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  placeholder="viewer123"
-                />
-              </label>
-              <label>
-                Seconds to add
-                <input
-                  type="number"
-                  min={1}
-                  value={secondsAdded}
-                  onChange={(e) => setSecondsAdded(Number(e.target.value))}
-                />
-              </label>
-              <label>
-                Dollars to add
-                <input
-                  type="number"
-                  min={0}
-                  step={0.01}
-                  value={moneyAdded}
-                  onChange={(e) =>
-                    setMoneyAdded(Math.max(0, Number(e.target.value) || 0))
-                  }
-                />
-              </label>
-              <button type="submit" disabled={busy}>
-                Add test event
-              </button>
-            </form>
-          </>
-        )}
-
-        <ModeratorsSection timerId={timerId} isOwner={isOwner} />
-
-        <div className="control-group">
+        <section className="overlay-link">
           <label>
-            Reset to (minutes)
-            <input
-              type="number"
-              min={1}
-              value={initialMinutes}
-              onChange={(e) => setInitialMinutes(Number(e.target.value))}
-            />
+            Overlay URL (add as an OBS browser source)
+            <div className="overlay-link-row">
+              <input type="text" readOnly value={overlayUrl} />
+              <button type="button" onClick={handleCopyOverlayUrl}>
+                {copied ? 'Copied!' : 'Copy'}
+              </button>
+            </div>
           </label>
-          <button onClick={handleReset} disabled={busy}>
-            Reset
-          </button>
-          <button
-            onClick={handleResume}
-            disabled={busy || snapshot?.running}
-          >
-            Play
-          </button>
-          <button onClick={handleStop} disabled={busy || !snapshot?.running}>
-            Pause
-          </button>
-        </div>
+          <OverlayUrlField
+            label="Goals overlay URL (a separate OBS browser source for the milestone list)"
+            url={goalsOverlayUrl}
+          />
+          <OverlayUrlField
+            label="Leaderboard panel URL (top 10 subs/bits/tips — screenshot for a Twitch panel image, or use as its own OBS browser source)"
+            url={panelUrl}
+          />
+        </section>
+      </div>
 
-        <div className="control-group control-group-stacked">
-          <div className="control-row">
-            <div className="control-toggle">
-              <span
-                className={`status ${snapshot?.locked ? 'status-down' : 'status-ok'}`}
-              >
-                {snapshot?.locked ? '🔒 Locked' : 'Unlocked'}
-              </span>
-              <span className="control-hint">
-                {snapshot?.locked
-                  ? 'Contributions no longer extend the clock'
-                  : 'Contributions extend the clock as usual'}
-              </span>
-            </div>
+      <section className="dashboard-columns">
+        <div className="dashboard-column">
+          <h2 className="dashboard-column-heading">Clock</h2>
+          <div className="control-group control-group-compact">
+            <label>
+              Reset to (minutes)
+              <input
+                type="number"
+                min={1}
+                value={initialMinutes}
+                onChange={(e) => setInitialMinutes(Number(e.target.value))}
+              />
+            </label>
+            <button onClick={handleReset} disabled={busy}>
+              Reset
+            </button>
             <button
-              onClick={() =>
-                handleToggle(snapshot?.locked ? unlockSubathon : lockSubathon)
-              }
-              disabled={busy}
+              onClick={handleResume}
+              disabled={busy || snapshot?.running}
             >
-              {snapshot?.locked ? 'Unlock' : 'Lock'}
+              Play
+            </button>
+            <button onClick={handleStop} disabled={busy || !snapshot?.running}>
+              Pause
             </button>
           </div>
-          <div className="control-row">
-            <div className="control-toggle">
-              <span
-                className={`status ${snapshot?.hidden ? 'status-down' : 'status-ok'}`}
-              >
-                {snapshot?.hidden ? '🙈 Hidden' : 'Visible'}
-              </span>
-              <span className="control-hint">
-                {snapshot?.hidden
-                  ? 'Not shown on the public overlay'
-                  : 'Shown on the public overlay'}
-              </span>
-            </div>
-            <button
-              onClick={() =>
-                handleToggle(snapshot?.hidden ? unhideSubathon : hideSubathon)
-              }
-              disabled={busy}
-            >
-              {snapshot?.hidden ? 'Unhide' : 'Hide'}
-            </button>
-          </div>
-          <div className="control-row">
-            <div className="control-toggle">
-              <span
-                className={`status ${snapshot?.ended ? 'status-down' : 'status-ok'}`}
-              >
-                {snapshot?.ended ? '⏹ Ended' : 'Active'}
-              </span>
-              <span className="control-hint">
-                {snapshot?.ended
-                  ? 'No longer receiving live events or chat commands'
-                  : 'Reachable by live events and "!timer ..." chat commands'}
-              </span>
-            </div>
-            <button
-              onClick={() => {
-                if (
-                  !snapshot?.ended &&
-                  !window.confirm(
-                    'End this subathon? It will stop receiving live events and "!timer ..." chat commands.',
-                  )
-                ) {
-                  return
+          <div className="control-group control-group-stacked">
+            <div className="control-row">
+              <div className="control-toggle">
+                <span
+                  className={`status ${snapshot?.locked ? 'status-down' : 'status-ok'}`}
+                >
+                  {snapshot?.locked ? '🔒 Locked' : 'Unlocked'}
+                </span>
+                <span className="control-hint">
+                  {snapshot?.locked
+                    ? 'Contributions no longer extend the clock'
+                    : 'Contributions extend the clock as usual'}
+                </span>
+              </div>
+              <button
+                onClick={() =>
+                  handleToggle(snapshot?.locked ? unlockSubathon : lockSubathon)
                 }
-                handleToggle(snapshot?.ended ? unendSubathon : endSubathon)
-              }}
-              disabled={busy}
-            >
-              {snapshot?.ended ? 'Reopen' : 'End subathon'}
-            </button>
+                disabled={busy}
+              >
+                {snapshot?.locked ? 'Unlock' : 'Lock'}
+              </button>
+            </div>
+            <div className="control-row">
+              <div className="control-toggle">
+                <span
+                  className={`status ${snapshot?.hidden ? 'status-down' : 'status-ok'}`}
+                >
+                  {snapshot?.hidden ? '🙈 Hidden' : 'Visible'}
+                </span>
+                <span className="control-hint">
+                  {snapshot?.hidden
+                    ? 'Not shown on the public overlay'
+                    : 'Shown on the public overlay'}
+                </span>
+              </div>
+              <button
+                onClick={() =>
+                  handleToggle(snapshot?.hidden ? unhideSubathon : hideSubathon)
+                }
+                disabled={busy}
+              >
+                {snapshot?.hidden ? 'Unhide' : 'Hide'}
+              </button>
+            </div>
+            <div className="control-row">
+              <div className="control-toggle">
+                <span
+                  className={`status ${snapshot?.ended ? 'status-down' : 'status-ok'}`}
+                >
+                  {snapshot?.ended ? '⏹ Ended' : 'Active'}
+                </span>
+                <span className="control-hint">
+                  {snapshot?.ended
+                    ? 'No longer receiving live events or chat commands'
+                    : 'Reachable by live events and "!timer ..." chat commands'}
+                </span>
+              </div>
+              <button
+                onClick={() => {
+                  if (
+                    !snapshot?.ended &&
+                    !window.confirm(
+                      'End this subathon? It will stop receiving live events and "!timer ..." chat commands.',
+                    )
+                  ) {
+                    return
+                  }
+                  handleToggle(snapshot?.ended ? unendSubathon : endSubathon)
+                }}
+                disabled={busy}
+              >
+                {snapshot?.ended ? 'Reopen' : 'End subathon'}
+              </button>
+            </div>
           </div>
+          <HappyHourForm
+            minutes={happyHourMinutes}
+            onMinutesChange={setHappyHourMinutes}
+            multiplier={happyHourMultiplier}
+            onMultiplierChange={setHappyHourMultiplier}
+            onStart={handleStartHappyHour}
+            busy={busy}
+            boostActive={snapshot?.boostActive ?? false}
+            boostEndsAt={snapshot?.boostEndsAt}
+            boostMultiplier={snapshot?.boostMultiplier}
+          />
+          {snapshot && (
+            <>
+              <MoneyGoalForm
+                initialGoal={snapshot.moneyGoal ?? 0}
+                onSave={(goal) => setMoneyGoal(timerId, goal)}
+              />
+              <MoneyRaisedForm
+                initialAmount={snapshot.totalMoneyRaised}
+                onSave={(amount) => setMoneyRaised(timerId, amount)}
+              />
+            </>
+          )}
         </div>
 
-        <HappyHourForm
-          minutes={happyHourMinutes}
-          onMinutesChange={setHappyHourMinutes}
-          onStart={handleStartHappyHour}
-          busy={busy}
-          boostActive={snapshot?.boostActive ?? false}
-          boostEndsAt={snapshot?.boostEndsAt}
-        />
+        <div className="dashboard-column">
+          <h2 className="dashboard-column-heading">Contributions</h2>
+          <AddDonationForm timerId={timerId} />
+          {snapshot && (
+                <form className="control-group" onSubmit={handleAddEvent}>
+                  <label>
+                    Test event: username
+                    <input
+                      type="text"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      placeholder="viewer123"
+                    />
+                  </label>
+                  <label>
+                    Seconds to add
+                    <input
+                      type="number"
+                      min={1}
+                      value={secondsAdded}
+                      onChange={(e) => setSecondsAdded(Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Dollars to add
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={moneyAdded}
+                      onChange={(e) =>
+                        setMoneyAdded(Math.max(0, Number(e.target.value) || 0))
+                      }
+                    />
+                  </label>
+                  <button type="submit" disabled={busy}>
+                    Add test event
+                  </button>
+                </form>
+          )}
+        </div>
 
-        <AddDonationForm timerId={timerId} />
-
-        {snapshot && (
-          <>
-            <MoneyGoalForm
-              initialGoal={snapshot.moneyGoal ?? 0}
-              onSave={(goal) => setMoneyGoal(timerId, goal)}
-            />
-            <MoneyRaisedForm
-              initialAmount={snapshot.totalMoneyRaised}
-              onSave={(amount) => setMoneyRaised(timerId, amount)}
-            />
-          </>
-        )}
+        <div className="dashboard-column">
+          <h2 className="dashboard-column-heading">Connections</h2>
+          {snapshot && (
+            <>
+                <TwitchChannelSelect
+                  initialUsername={snapshot.twitchChannel ?? ''}
+                  onSave={(username) => setTwitchChannel(timerId, username)}
+                />
+                <ChannelForm
+                  label="Kick channel to watch"
+                  placeholder="channel slug, e.g. xqc"
+                  initialUsername={snapshot.kickChannel ?? ''}
+                  onSave={(username) => setKickChannel(timerId, username)}
+                />
+                <YouTubeChannelSelect
+                  initialChannel={snapshot.youtubeChannel ?? ''}
+                  initialChannelId={snapshot.youtubeChannelId ?? ''}
+                  onSave={(channelId) => setYouTubeChannel(timerId, channelId)}
+                />
+                <StreamElementsForm timerId={timerId} />
+            </>
+          )}
+          <ModeratorsSection timerId={timerId} isOwner={isOwner} />
+        </div>
       </section>
 
       <section className="events">

@@ -66,6 +66,10 @@ type TimerRecord struct {
 	// (see Timer.StartTimeBoost) expires; the zero value means none is
 	// active.
 	BoostEndsAt time.Time
+	// BoostMultiplier is how much that boost multiplies time contributions
+	// by, e.g. 2 for double time. Values <= 1 are treated as
+	// DefaultBoostMultiplier.
+	BoostMultiplier float64
 
 	// OverlayTimerBg/OverlayTimerText/OverlayMoneyBg/OverlayMoneyText/
 	// OverlayGoalBg/OverlayGoalText/OverlayGoalAmountBg/

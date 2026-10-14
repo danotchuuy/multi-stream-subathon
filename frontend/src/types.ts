@@ -78,12 +78,14 @@ export interface Snapshot {
    * command — only reachable from the dashboard, never chat. Manual
    * events and every other dashboard control still work regardless. */
   ended: boolean
-  /** While true, a "!timer hh <duration>"/dashboard "Start Happy Hour"
-   * boost has every real contribution's time value doubled; boostEndsAt
-   * (ISO timestamp) is when it ends. False (and boostEndsAt absent) once
-   * expired, not just when none has ever been started. */
+  /** While true, a "!timer hh <duration> [multiplier]"/dashboard "Start
+   * Happy Hour" boost has every real contribution's time value multiplied
+   * by boostMultiplier; boostEndsAt (ISO timestamp) is when it ends. False
+   * (and boostEndsAt absent) once expired, not just when none has ever
+   * been started. */
   boostActive: boolean
   boostEndsAt?: string
+  boostMultiplier?: number
   /** Colors for the public overlays' pills. Always fully populated
    * (server fills in defaults), never partial. */
   overlayColors: OverlayColors

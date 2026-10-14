@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS timers (
 	hidden                        INTEGER NOT NULL DEFAULT 0,
 	ended                         INTEGER NOT NULL DEFAULT 0,
 	boost_ends_at                 TEXT,
+	boost_multiplier              REAL NOT NULL DEFAULT 2,
 	overlay_timer_bg              TEXT NOT NULL DEFAULT '',
 	overlay_timer_text            TEXT NOT NULL DEFAULT '',
 	overlay_money_bg              TEXT NOT NULL DEFAULT '',
@@ -389,6 +390,10 @@ func Open(path string) (*Repo, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate timers.boost_ends_at: %w", err)
 	}
+	if err := addColumnIfMissing(db, "timers", "boost_multiplier", "REAL NOT NULL DEFAULT 2"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("migrate timers.boost_multiplier: %w", err)
+	}
 
 	// reward_rules moved from being keyed by user_id to timer_id (reward
 	// rates are now per-timer, not account-wide). A pre-existing table
@@ -520,7 +525,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 		       total_money_raised, money_goal,
 		       twitch_broadcaster_id, twitch_broadcaster_username,
 		       kick_broadcaster_id, kick_broadcaster_username,
-		       youtube_channel_id, youtube_channel_title, locked, hidden, ended, boost_ends_at,
+		       youtube_channel_id, youtube_channel_title, locked, hidden, ended, boost_ends_at, boost_multiplier,
 		       overlay_timer_bg, overlay_timer_text, overlay_money_bg, overlay_money_text,
 		       overlay_goal_bg, overlay_goal_text, overlay_goal_amount_bg, overlay_goal_amount_text,
 		       stream_elements_token, stream_elements_refresh_token, stream_elements_token_expires_at,
@@ -554,7 +559,7 @@ func (r *Repo) ListTimers() ([]subathon.TimerRecord, error) {
 			&rec.RemainingSecs, &rec.TotalAddedSecs, &rec.TotalMoneyRaised, &rec.MoneyGoal,
 			&twitchBroadcasterID, &twitchBroadcasterUsername,
 			&kickBroadcasterID, &kickBroadcasterUsername,
-			&youtubeChannelID, &youtubeChannelTitle, &locked, &hidden, &ended, &boostEndsAt,
+			&youtubeChannelID, &youtubeChannelTitle, &locked, &hidden, &ended, &boostEndsAt, &rec.BoostMultiplier,
 			&rec.OverlayTimerBg, &rec.OverlayTimerText, &rec.OverlayMoneyBg, &rec.OverlayMoneyText,
 			&rec.OverlayGoalBg, &rec.OverlayGoalText, &rec.OverlayGoalAmountBg, &rec.OverlayGoalAmountText,
 			&rec.StreamElementsToken, &rec.StreamElementsRefreshToken, &streamElementsTokenExpiresAt,
@@ -601,7 +606,7 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		     total_money_raised = ?, money_goal = ?,
 		     twitch_broadcaster_id = ?, twitch_broadcaster_username = ?,
 		     kick_broadcaster_id = ?, kick_broadcaster_username = ?,
-		     youtube_channel_id = ?, youtube_channel_title = ?, locked = ?, hidden = ?, ended = ?, boost_ends_at = ?,
+		     youtube_channel_id = ?, youtube_channel_title = ?, locked = ?, hidden = ?, ended = ?, boost_ends_at = ?, boost_multiplier = ?,
 		     overlay_timer_bg = ?, overlay_timer_text = ?, overlay_money_bg = ?, overlay_money_text = ?,
 		     overlay_goal_bg = ?, overlay_goal_text = ?, overlay_goal_amount_bg = ?, overlay_goal_amount_text = ?,
 		     stream_elements_token = ?, stream_elements_refresh_token = ?, stream_elements_token_expires_at = ?,
@@ -618,7 +623,7 @@ func (r *Repo) SaveTimerState(rec subathon.TimerRecord) error {
 		nullableString(rec.TwitchBroadcasterID), nullableString(rec.TwitchBroadcasterUsername),
 		nullableString(rec.KickBroadcasterID), nullableString(rec.KickBroadcasterUsername),
 		nullableString(rec.YouTubeChannelID), nullableString(rec.YouTubeChannelTitle),
-		boolToInt(rec.Locked), boolToInt(rec.Hidden), boolToInt(rec.Ended), nullableTime(rec.BoostEndsAt),
+		boolToInt(rec.Locked), boolToInt(rec.Hidden), boolToInt(rec.Ended), nullableTime(rec.BoostEndsAt), rec.BoostMultiplier,
 		rec.OverlayTimerBg, rec.OverlayTimerText, rec.OverlayMoneyBg, rec.OverlayMoneyText,
 		rec.OverlayGoalBg, rec.OverlayGoalText, rec.OverlayGoalAmountBg, rec.OverlayGoalAmountText,
 		rec.StreamElementsToken, rec.StreamElementsRefreshToken, nullableTime(rec.StreamElementsTokenExpiresAt),

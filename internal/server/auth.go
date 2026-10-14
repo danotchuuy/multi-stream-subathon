@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,6 +28,9 @@ func mountAuthRoutes(r chi.Router, deps Deps) {
 	r.Get("/auth/{provider}/callback", handleOAuthCallback(deps))
 	r.Post("/auth/logout", handleLogout(deps))
 	r.Get("/api/auth/providers", handleAuthProviders(deps))
+	if deps.DevLogin {
+		r.Get("/auth/dev/login", handleDevLogin(deps))
+	}
 
 	// StreamElements' connect flow is per-timer, not tied to this app's
 	// own login/account system the way {provider}/start above is (see
@@ -229,6 +234,51 @@ func handleOAuthCallback(deps Deps) http.HandlerFunc {
 
 		setSessionCookie(w, raw, deps.CookieSecure)
 		http.Redirect(w, r, deps.AllowedOrigin+"/", http.StatusFound)
+	}
+}
+
+// devUsernamePattern limits handleDevLogin's username to something that
+// looks like a real platform handle.
+var devUsernamePattern = regexp.MustCompile(`^[A-Za-z0-9_]{1,25}$`)
+
+// handleDevLogin signs in as a dummy account with no OAuth provider
+// involved — ?username=<name> (default "devuser") picks which one, and
+// the same name always maps to the same account (and its timers), so
+// e.g. a second username can stand in for a moderator. Then redirects
+// to ?redirect=<path> (default "/"), which must be a same-origin path.
+// Only mounted when Deps.DevLogin is set (DEV_LOGIN=true); see
+// config.Config.DevLogin.
+func handleDevLogin(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		username := r.URL.Query().Get("username")
+		if username == "" {
+			username = "devuser"
+		}
+		if !devUsernamePattern.MatchString(username) {
+			http.Error(w, "username must be 1-25 letters, digits, or underscores", http.StatusBadRequest)
+			return
+		}
+
+		redirect := r.URL.Query().Get("redirect")
+		if !strings.HasPrefix(redirect, "/") || strings.HasPrefix(redirect, "//") || strings.HasPrefix(redirect, "/\\") {
+			redirect = "/"
+		}
+
+		user, err := deps.Auth.LoginOrSignup(auth.PlatformDev, "dev:"+strings.ToLower(username), username, "", "", time.Time{})
+		if err != nil {
+			log.Printf("dev login as %s: %v", username, err)
+			http.Error(w, "dev login failed", http.StatusInternalServerError)
+			return
+		}
+		raw, err := deps.Auth.CreateSession(user.ID)
+		if err != nil {
+			log.Printf("dev login as %s: create session: %v", username, err)
+			http.Error(w, "dev login failed", http.StatusInternalServerError)
+			return
+		}
+
+		setSessionCookie(w, raw, deps.CookieSecure)
+		http.Redirect(w, r, deps.AllowedOrigin+redirect, http.StatusFound)
 	}
 }
 

@@ -671,8 +671,9 @@ func giftedTierToItem(tier string) subathon.RewardItem {
 // Deliberately has no "end"/"unend" entry — ending a timer (see
 // subathon.Timer.SetEnded) is dashboard-only, precisely so it can't be
 // triggered (or, worse, undone) by anyone with chat access. "hh" ("Happy
-// Hour") is the only one that takes an argument — a duration like "30m",
-// carried in ChatCommand.Arg — the rest are bare toggles.
+// Hour") is the only one that takes arguments — a duration like "30m"
+// and an optional multiplier like "3x", carried in ChatCommand.Arg — the
+// rest are bare toggles.
 var chatCommandNames = map[string]bool{
 	"pause":  true,
 	"play":   true,
@@ -697,7 +698,7 @@ type ChatCommand struct {
 	Username          string
 	// Name is one of chatCommandNames' keys, e.g. "pause" (no "!timer").
 	Name string
-	// Arg is whatever followed Name, e.g. "30m" for "!timer hh 30m".
+	// Arg is whatever followed Name, e.g. "30m 3x" for "!timer hh 30m 3x".
 	// Empty for every command except "hh".
 	Arg string
 }
