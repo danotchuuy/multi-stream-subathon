@@ -23,6 +23,7 @@ import (
 
 	"github.com/danotchuuy/multi-stream-subathon/internal/auth"
 	"github.com/danotchuuy/multi-stream-subathon/internal/oauth"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/discord"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/kick"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/streamelements"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/throne"
@@ -49,6 +50,11 @@ type Deps struct {
 	// Kick is Twitch's equivalent for Kick's webhook events. Nil disables
 	// /webhooks/kick and live Kick events (KICK_CLIENT_ID unset).
 	Kick *kick.Client
+
+	// Discord posts happy hour announcements to each timer's Discord
+	// webhook, if it has one (see postDiscord). Always non-nil in
+	// production — webhooks need no app credential.
+	Discord *discord.Client
 
 	// StreamElements resolves an OAuth2 access token to the channel it
 	// belongs to (see handleStreamElementsOAuthCallback). Always non-nil,
@@ -190,6 +196,12 @@ func New(deps Deps) http.Handler {
 				// contributions for a chosen duration and announces it on
 				// this timer's configured Twitch channel, if any.
 				r.Post("/control/happy-hour", handleStartHappyHour(deps))
+				r.Post("/control/happy-hour/end", handleEndHappyHour(deps))
+				// Happy hours queued to start at a date/time or once the
+				// countdown reaches a mark (see RunHappyHourScheduler).
+				r.Get("/scheduled-happy-hours", handleListScheduledHappyHours())
+				r.Post("/scheduled-happy-hours", handleScheduleHappyHour(deps))
+				r.Delete("/scheduled-happy-hours/{scheduleID}", handleCancelScheduledHappyHour(deps))
 				r.Post("/events", handleAddEvent(deps.Hub))
 				r.Delete("/events/{eventID}", handleRemoveEvent(deps.Hub))
 				r.Get("/reward-rules", handleGetRewardRules())
@@ -216,6 +228,16 @@ func New(deps Deps) http.Handler {
 				r.Delete("/stream-elements-token", handleDisconnectStreamElements(deps))
 				r.Get("/stream-elements/oauth/start", handleStreamElementsOAuthStart(deps))
 				r.Get("/moderators", handleListModerators(deps))
+				// Discord webhook for happy hour announcements (see
+				// discord_announce.go). The URL itself is never returned.
+				r.Get("/discord", handleGetDiscordSettings(deps))
+				r.Put("/discord", handleSetDiscordSettings(deps))
+				r.Post("/discord/preview", handleDiscordPreview())
+				r.Post("/discord/test", handleTestDiscordWebhook(deps))
+				// Twitch chat happy hour announcements (see twitch_announce.go).
+				r.Get("/twitch-announcements", handleGetTwitchAnnouncements())
+				r.Put("/twitch-announcements", handleSetTwitchAnnouncements())
+				r.Post("/twitch-announcements/preview", handleTwitchAnnouncementsPreview())
 			})
 
 			// Managing *who* moderates a timer is owner-only — unlike the

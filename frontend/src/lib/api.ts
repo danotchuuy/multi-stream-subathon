@@ -1,5 +1,10 @@
 import type {
   AuthPlatform,
+  DiscordNotifications,
+  DiscordPreviewMessage,
+  DiscordSettings,
+  TwitchAnnouncementSettings,
+  TwitchAnnouncements,
   EventType,
   HappyHourStyle,
   Leaderboard,
@@ -12,6 +17,7 @@ import type {
   PanelColors,
   Platform,
   RewardRules,
+  ScheduledHappyHour,
   Snapshot,
   StatIcons,
   StreamElementsStatus,
@@ -166,6 +172,12 @@ export function unendSubathon(timerId: string): Promise<Snapshot> {
   return request(`/api/timers/${timerId}/control/unend`, { method: 'POST' })
 }
 
+/** Whether multiplier is one the server accepts for a happy hour (more
+ * than 1×, at most 10×). */
+export function validHappyHourMultiplier(multiplier: number): boolean {
+  return multiplier > 1 && multiplier <= 10
+}
+
 /** Starts a "Happy Hour": multiplies time contributions by multiplier
  * (server defaults to 2× if omitted) for durationSeconds — the dashboard's
  * equivalent of a channel moderator's "!timer hh <duration> [multiplier]"
@@ -182,6 +194,108 @@ export function startHappyHour(
     method: 'POST',
     body: JSON.stringify({ durationSeconds, multiplier }),
   })
+}
+
+/** Ends the active happy hour now (409 if none is active), announcing
+ * it on Twitch/Discord the same as when one runs its course. */
+export function endHappyHour(timerId: string): Promise<Snapshot> {
+  return request(`/api/timers/${timerId}/control/happy-hour/end`, { method: 'POST' })
+}
+
+/** A timer's pending scheduled happy hours, in roughly the order they'll
+ * start. Owner/moderator only. */
+export function getScheduledHappyHours(timerId: string): Promise<ScheduledHappyHour[]> {
+  return request(`/api/timers/${timerId}/scheduled-happy-hours`)
+}
+
+/** Queues a happy hour to start at startAt (an ISO timestamp, trigger
+ * 'at') or once the countdown reaches remainingSecs left (trigger
+ * 'remaining'), lasting durationSeconds at multiplier — announced in
+ * Twitch chat when it starts, same as startHappyHour. */
+export function scheduleHappyHour(
+  timerId: string,
+  schedule:
+    | { trigger: 'at'; startAt: string }
+    | { trigger: 'remaining'; remainingSecs: number },
+  durationSeconds: number,
+  multiplier?: number,
+): Promise<ScheduledHappyHour> {
+  return request(`/api/timers/${timerId}/scheduled-happy-hours`, {
+    method: 'POST',
+    body: JSON.stringify({ ...schedule, durationSeconds, multiplier }),
+  })
+}
+
+/** Cancels a scheduled happy hour before it starts. */
+export function cancelScheduledHappyHour(timerId: string, scheduleId: string): Promise<void> {
+  return request(`/api/timers/${timerId}/scheduled-happy-hours/${scheduleId}`, {
+    method: 'DELETE',
+  })
+}
+
+/** A timer's Discord happy hour announcement settings. */
+export function getDiscordSettings(timerId: string): Promise<DiscordSettings> {
+  return request(`/api/timers/${timerId}/discord`)
+}
+
+/** Saves a timer's Discord settings. webhookUrl replaces the webhook (''
+ * removes it); leave it undefined to keep the current one. */
+export function setDiscordSettings(
+  timerId: string,
+  settings: { leadMinutes: number; notifications: DiscordNotifications; webhookUrl?: string },
+): Promise<DiscordSettings> {
+  return request(`/api/timers/${timerId}/discord`, {
+    method: 'PUT',
+    body: JSON.stringify(settings),
+  })
+}
+
+/** Every Discord announcement (on or off) for a sample happy hour, as
+ * it would be posted with these (possibly unsaved) settings. Built by
+ * the server with the same code as the real posts; sends nothing to
+ * Discord. */
+export function getDiscordPreview(
+  timerId: string,
+  leadMinutes: number,
+  notifications: DiscordNotifications,
+): Promise<DiscordPreviewMessage[]> {
+  return request(`/api/timers/${timerId}/discord/preview`, {
+    method: 'POST',
+    body: JSON.stringify({ leadMinutes, notifications }),
+  })
+}
+
+/** A timer's Twitch chat happy hour announcement settings. */
+export function getTwitchAnnouncements(timerId: string): Promise<TwitchAnnouncementSettings> {
+  return request(`/api/timers/${timerId}/twitch-announcements`)
+}
+
+/** Saves a timer's Twitch chat happy hour announcement settings. */
+export function setTwitchAnnouncements(
+  timerId: string,
+  announcements: TwitchAnnouncements,
+): Promise<TwitchAnnouncementSettings> {
+  return request(`/api/timers/${timerId}/twitch-announcements`, {
+    method: 'PUT',
+    body: JSON.stringify(announcements),
+  })
+}
+
+/** Both Twitch announcements (on or off) for a sample happy hour, as
+ * they'd be posted with these (possibly unsaved) settings. */
+export function getTwitchAnnouncementsPreview(
+  timerId: string,
+  announcements: TwitchAnnouncements,
+): Promise<DiscordPreviewMessage[]> {
+  return request(`/api/timers/${timerId}/twitch-announcements/preview`, {
+    method: 'POST',
+    body: JSON.stringify(announcements),
+  })
+}
+
+/** Posts a test message through the timer's saved Discord webhook. */
+export function testDiscordWebhook(timerId: string): Promise<void> {
+  return request(`/api/timers/${timerId}/discord/test`, { method: 'POST' })
 }
 
 /** GET a timer's reward rules (seconds per contribution, by item and

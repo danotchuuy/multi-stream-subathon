@@ -16,6 +16,7 @@ import (
 	"github.com/danotchuuy/multi-stream-subathon/internal/auth"
 	"github.com/danotchuuy/multi-stream-subathon/internal/config"
 	"github.com/danotchuuy/multi-stream-subathon/internal/oauth"
+	"github.com/danotchuuy/multi-stream-subathon/internal/platform/discord"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/kick"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/streamelements"
 	"github.com/danotchuuy/multi-stream-subathon/internal/platform/throne"
@@ -127,7 +128,7 @@ func main() {
 		log.Printf("WARNING: DEV_LOGIN is enabled — anyone who can reach this server can sign in via /auth/dev/login")
 	}
 
-	router := server.New(server.Deps{
+	deps := server.Deps{
 		Manager:              manager,
 		Hub:                  hub,
 		Auth:                 authService,
@@ -135,6 +136,7 @@ func main() {
 		OAuthStates:          states,
 		Twitch:               twitchClient,
 		Kick:                 kickClient,
+		Discord:              discord.NewClient(),
 		StreamElements:       streamElementsClient,
 		StreamElementsOAuth:  streamElementsOAuth,
 		StreamElementsPoller: streamElementsPoller,
@@ -145,7 +147,8 @@ func main() {
 		CookieSecure:         cfg.CookieSecure,
 		UIDistDir:            cfg.UIDistDir,
 		DevLogin:             cfg.DevLogin,
-	})
+	}
+	router := server.New(deps)
 	httpServer := &http.Server{
 		Addr:    cfg.Addr,
 		Handler: router,
@@ -157,6 +160,9 @@ func main() {
 	// Push a snapshot to connected clients on a steady tick so the
 	// countdown updates smoothly even between events.
 	go broadcastLoop(ctx, manager, hub)
+
+	// Start scheduled happy hours as they come due.
+	go server.RunHappyHourScheduler(ctx, deps)
 
 	// Bound memory from abandoned OAuth flows, expired sessions, and (if
 	// configured) each platform's webhook notification dedupe set.

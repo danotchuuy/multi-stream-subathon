@@ -14,6 +14,13 @@ export function formatDuration(totalSeconds: number): string {
   return `${hours}:${pad(minutes)}:${pad(seconds)}`
 }
 
+/** Returns how many whole seconds remain until isoTime, floored at 0 for
+ * a timestamp already in the past (e.g. a stale snapshot the next
+ * websocket tick hasn't overwritten yet). */
+export function secondsUntil(isoTime: string): number {
+  return Math.max(0, (new Date(isoTime).getTime() - Date.now()) / 1000)
+}
+
 /** Formats a dollar amount with 2 decimal places, e.g. 4.75 rather than 5. */
 export function formatMoney(amount: number): string {
   return amount.toFixed(2)

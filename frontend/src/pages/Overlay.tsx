@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { useSubathon } from '../lib/useSubathon'
 import { getMilestoneAlerts } from '../lib/api'
-import { formatDuration, formatWholeMoney } from '../lib/format'
+import { formatDuration, formatWholeMoney, secondsUntil } from '../lib/format'
 import { useMilestoneAlertSounds } from '../lib/alertSound'
 import { DEFAULT_EXPLOSION_COLOR, explosionColorStyle, ExplosionBurst } from '../lib/explosion'
 import { DEFAULT_HAPPY_HOUR_STYLE, HappyHourWrap } from '../lib/happyHour'
@@ -83,6 +83,7 @@ export default function Overlay() {
         active={Boolean(snapshot?.boostActive) && !exploded}
         happyHourStyle={snapshot?.happyHourStyle ?? DEFAULT_HAPPY_HOUR_STYLE}
         multiplier={snapshot?.boostMultiplier ?? 2}
+        secondsLeft={snapshot?.boostEndsAt ? secondsUntil(snapshot.boostEndsAt) : undefined}
       >
         <div
           className={exploded ? 'overlay-explosion-wrap' : undefined}

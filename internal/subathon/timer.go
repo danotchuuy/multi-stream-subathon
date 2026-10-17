@@ -376,6 +376,14 @@ type Snapshot struct {
 	// saved, so the main overlay knows to refetch it.
 	AlertsVersion int `json:"alertsVersion"`
 
+	// HappyHourScheduleVersion is AlertsVersion's equivalent for the
+	// scheduled happy hour list (see Timer.ScheduledHappyHours) —
+	// increments each time one is added, cancelled, or starts, so the
+	// dashboard knows to refetch it. The list itself isn't part of the
+	// (public) snapshot, so viewers can't see a surprise happy hour
+	// coming.
+	HappyHourScheduleVersion int `json:"happyHourScheduleVersion"`
+
 	// OverlayColors customizes the public overlay's timer/money-goal pill
 	// colors — always populated (DefaultOverlayColors until customized),
 	// never the zero value.
@@ -462,6 +470,12 @@ type Timer struct {
 	milestonesVersion int
 	// alertsVersion backs Snapshot.AlertsVersion.
 	alertsVersion int
+	// happyHourScheduleVersion backs Snapshot.HappyHourScheduleVersion.
+	happyHourScheduleVersion int
+
+	// scheduledHappyHours are this timer's pending happy hours, in the
+	// order sortScheduledHappyHours gives — see ScheduleHappyHour.
+	scheduledHappyHours []ScheduledHappyHour
 
 	// ended, when true, means this timer stops receiving live platform
 	// events and no longer responds to any "!timer ..." chat command —
@@ -475,6 +489,14 @@ type Timer struct {
 	// TimeBoostActive).
 	boostEndsAt     time.Time
 	boostMultiplier float64
+
+	// boostStartedAt is when the current (or last) boost started;
+	// hhAddedSecs/hhBonusSecs tally the time it added to the clock and
+	// how much of that was the multiplier's extra. Reset by
+	// StartTimeBoost — see HappyHourTally.
+	boostStartedAt time.Time
+	hhAddedSecs    int
+	hhBonusSecs    int
 
 	// happyHourStyle backs Snapshot.HappyHourStyle; always filled (see
 	// fillHappyHourStyle).
@@ -547,6 +569,14 @@ type Timer struct {
 	// see SetAlertSoundsEnabled.
 	alertSoundsEnabled bool
 
+	// discord backs DiscordSettings. Its WebhookURL is a secret: like
+	// the StreamElements tokens, it must never appear in Snapshot or any
+	// other response.
+	discord DiscordSettings
+
+	// twitchAnnouncements backs TwitchAnnouncements.
+	twitchAnnouncements TwitchAnnouncements
+
 	// statIcons customizes each rotating stat list category's icon;
 	// always fully populated (see fillStatIconDefaults), never a zero
 	// value.
@@ -564,11 +594,12 @@ type Timer struct {
 	moderatorIDs map[string]bool
 }
 
-func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string) *Timer {
+func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string, scheduledHappyHours []ScheduledHappyHour) *Timer {
 	mods := make(map[string]bool, len(moderatorIDs))
 	for _, id := range moderatorIDs {
 		mods[id] = true
 	}
+	sortScheduledHappyHours(scheduledHappyHours)
 	return &Timer{
 		repo:            repo,
 		id:              rec.ID,
@@ -585,6 +616,9 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		ended:           rec.Ended,
 		boostEndsAt:     rec.BoostEndsAt,
 		boostMultiplier: normalizeBoostMultiplier(rec.BoostMultiplier),
+		boostStartedAt:  rec.BoostStartedAt,
+		hhAddedSecs:     rec.HHAddedSecs,
+		hhBonusSecs:     rec.HHBonusSecs,
 		happyHourStyle: fillHappyHourStyle(HappyHourStyle{
 			Enabled:   rec.HappyHourAnimationEnabled,
 			Style:     rec.HappyHourAnimationStyle,
@@ -622,6 +656,12 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 		explosionEnabled:     rec.ExplosionEnabled,
 		explosionColor:       fillExplosionColor(rec.ExplosionColor),
 		alertSoundsEnabled:   rec.AlertSoundsEnabled,
+		discord: DiscordSettings{
+			WebhookURL:    rec.DiscordWebhookURL,
+			HHLead:        time.Duration(rec.DiscordHHLeadMins) * time.Minute,
+			Notifications: discordNotificationsFromRecord(rec),
+		},
+		twitchAnnouncements: twitchAnnouncementsFromRecord(rec),
 		statIcons: fillStatIconDefaults(StatIcons{
 			Style:     StatIconStyle(rec.StatIconStyle),
 			Outline:   rec.StatIconOutline,
@@ -640,7 +680,8 @@ func newTimer(repo Repo, rec TimerRecord, events []Event, moderatorIDs []string)
 			AccentBg:   rec.PanelAccentBg,
 			AccentText: rec.PanelAccentText,
 		}),
-		moderatorIDs: mods,
+		moderatorIDs:        mods,
+		scheduledHappyHours: scheduledHappyHours,
 	}
 }
 
@@ -1026,8 +1067,48 @@ func (t *Timer) StartTimeBoost(d time.Duration, multiplier float64) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.boostEndsAt = time.Now().Add(d)
+	now := time.Now()
+	t.boostStartedAt = now
+	t.boostEndsAt = now.Add(d)
 	t.boostMultiplier = normalizeBoostMultiplier(multiplier)
+	t.hhAddedSecs, t.hhBonusSecs = 0, 0
+	return t.persistLocked()
+}
+
+// HappyHourTally reports how much time the current (or most recent)
+// happy hour added to the clock — every contribution recorded while it
+// was active and the timer wasn't locked, manual ones included — and how
+// much of that was the multiplier's extra on top of the contributions'
+// normal value. Removing one of those contributions (RemoveEvent) takes
+// it back out. Starting a new happy hour resets both.
+func (t *Timer) HappyHourTally() (added, bonus time.Duration) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return time.Duration(t.hhAddedSecs) * time.Second, time.Duration(t.hhBonusSecs) * time.Second
+}
+
+// inHappyHourLocked reports whether at falls within the current (or most
+// recent) happy hour. Caller must hold t.mu.
+func (t *Timer) inHappyHourLocked(at time.Time) bool {
+	return !t.boostStartedAt.IsZero() && !at.Before(t.boostStartedAt) && at.Before(t.boostEndsAt)
+}
+
+// ErrNoTimeBoost is returned by EndTimeBoost when no time boost is
+// active.
+var ErrNoTimeBoost = errors.New("no happy hour is active")
+
+// EndTimeBoost ends the active time boost now, ahead of its scheduled
+// expiry. Moving boostEndsAt also tells the original expiry's pending
+// "it's over" announcement (see TimeBoostEndsAt) that it's stale.
+func (t *Timer) EndTimeBoost() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	now := time.Now()
+	if t.boostEndsAt.IsZero() || !now.Before(t.boostEndsAt) {
+		return ErrNoTimeBoost
+	}
+	t.boostEndsAt = now
 	return t.persistLocked()
 }
 
@@ -1254,11 +1335,19 @@ func (t *Timer) AddEvent(e Event) error {
 	// real contribution's time value while active — EventManual is
 	// excluded since it's the dashboard's raw "Add test event" tool, not
 	// an actual tracked reward item (see rewards.go's RewardItems).
-	if e.Type != EventManual && e.SecondsAdded > 0 && !t.boostEndsAt.IsZero() && time.Now().Before(t.boostEndsAt) {
-		e.SecondsAdded = ApplyBoostMultiplier(e.SecondsAdded, t.boostMultiplier)
+	boostActive := !t.boostEndsAt.IsZero() && time.Now().Before(t.boostEndsAt)
+	bonus := 0
+	if e.Type != EventManual && e.SecondsAdded > 0 && boostActive {
+		boosted := ApplyBoostMultiplier(e.SecondsAdded, t.boostMultiplier)
+		bonus = boosted - e.SecondsAdded
+		e.SecondsAdded = boosted
 	}
 
 	if !t.locked {
+		if boostActive {
+			t.hhAddedSecs += e.SecondsAdded
+			t.hhBonusSecs += bonus
+		}
 		added := time.Duration(e.SecondsAdded) * time.Second
 		t.totalAdded += e.SecondsAdded
 		if t.running {
@@ -1314,6 +1403,15 @@ func (t *Timer) RemoveEvent(eventID string) error {
 
 	removedSecs := time.Duration(removed.SecondsAdded) * time.Second
 	t.totalAdded -= removed.SecondsAdded
+	if t.inHappyHourLocked(removed.Occurred) {
+		// The event's own pre-multiplier value isn't stored, so its share
+		// of the bonus is worked back out from the multiplier.
+		t.hhAddedSecs = max(0, t.hhAddedSecs-removed.SecondsAdded)
+		if removed.Type != EventManual && removed.SecondsAdded > 0 {
+			base := int(math.Round(float64(removed.SecondsAdded) / t.boostMultiplier))
+			t.hhBonusSecs = max(0, t.hhBonusSecs-(removed.SecondsAdded-base))
+		}
+	}
 	if t.running {
 		t.endsAt = t.endsAt.Add(-removedSecs)
 	} else {
@@ -1494,40 +1592,50 @@ func (t *Timer) Snapshot() Snapshot {
 	copy(events, t.events)
 
 	return Snapshot{
-		ID:                   t.id,
-		Name:                 t.name,
-		Running:              t.running,
-		StartedAt:            t.startedAt,
-		EndsAt:               endsAt,
-		RemainingSecs:        int(remaining.Seconds()),
-		TotalAddedSecs:       t.totalAdded,
-		RecentEvents:         events,
-		TwitchChannel:        t.twitchBroadcasterUsername,
-		KickChannel:          t.kickBroadcasterUsername,
-		YouTubeChannel:       t.youtubeChannelTitle,
-		YouTubeChannelID:     t.youtubeChannelID,
-		TotalMoneyRaised:     t.totalMoneyRaised,
-		MoneyGoal:            t.moneyGoal,
-		Locked:               t.locked,
-		Hidden:               t.hidden,
-		MilestonesVersion:    t.milestonesVersion,
-		AlertsVersion:        t.alertsVersion,
-		Ended:                t.ended,
-		BoostActive:          boostActive,
-		BoostEndsAt:          boostEndsAt,
-		BoostMultiplier:      t.boostMultiplier,
-		HappyHourStyle:       t.happyHourStyle,
-		OverlayColors:        t.overlayColors,
-		SubsGiven:            t.subsGiven,
-		BitsGiven:            t.bitsGiven,
-		DonationsGiven:       t.donationsGiven,
-		StatsRotationEnabled: t.statsRotationEnabled,
-		ExplosionEnabled:     t.explosionEnabled,
-		ExplosionColor:       t.explosionColor,
-		AlertSoundsEnabled:   t.alertSoundsEnabled,
-		StatIcons:            t.statIcons,
-		PanelColors:          t.panelColors,
+		ID:                       t.id,
+		Name:                     t.name,
+		Running:                  t.running,
+		StartedAt:                t.startedAt,
+		EndsAt:                   endsAt,
+		RemainingSecs:            int(remaining.Seconds()),
+		TotalAddedSecs:           t.totalAdded,
+		RecentEvents:             events,
+		TwitchChannel:            t.twitchBroadcasterUsername,
+		KickChannel:              t.kickBroadcasterUsername,
+		YouTubeChannel:           t.youtubeChannelTitle,
+		YouTubeChannelID:         t.youtubeChannelID,
+		TotalMoneyRaised:         t.totalMoneyRaised,
+		MoneyGoal:                t.moneyGoal,
+		Locked:                   t.locked,
+		Hidden:                   t.hidden,
+		MilestonesVersion:        t.milestonesVersion,
+		AlertsVersion:            t.alertsVersion,
+		HappyHourScheduleVersion: t.happyHourScheduleVersion,
+		Ended:                    t.ended,
+		BoostActive:              boostActive,
+		BoostEndsAt:              boostEndsAt,
+		BoostMultiplier:          t.boostMultiplier,
+		HappyHourStyle:           t.happyHourStyle,
+		OverlayColors:            t.overlayColors,
+		SubsGiven:                t.subsGiven,
+		BitsGiven:                t.bitsGiven,
+		DonationsGiven:           t.donationsGiven,
+		StatsRotationEnabled:     t.statsRotationEnabled,
+		ExplosionEnabled:         t.explosionEnabled,
+		ExplosionColor:           t.explosionColor,
+		AlertSoundsEnabled:       t.alertSoundsEnabled,
+		StatIcons:                t.statIcons,
+		PanelColors:              t.panelColors,
 	}
+}
+
+// remainingLocked returns the time left on the clock as of now. Caller
+// must hold t.mu (read or write).
+func (t *Timer) remainingLocked(now time.Time) time.Duration {
+	if t.running {
+		return max(0, t.endsAt.Sub(now))
+	}
+	return t.remaining
 }
 
 // persistLocked writes the current clock state to the repo. Caller must
@@ -1553,6 +1661,9 @@ func (t *Timer) persistLocked() error {
 		Ended:                        t.ended,
 		BoostEndsAt:                  t.boostEndsAt,
 		BoostMultiplier:              t.boostMultiplier,
+		BoostStartedAt:               t.boostStartedAt,
+		HHAddedSecs:                  t.hhAddedSecs,
+		HHBonusSecs:                  t.hhBonusSecs,
 		HappyHourAnimationEnabled:    t.happyHourStyle.Enabled,
 		HappyHourAnimationStyle:      t.happyHourStyle.Style,
 		HappyHourAnimationColor:      t.happyHourStyle.Color,
@@ -1583,6 +1694,10 @@ func (t *Timer) persistLocked() error {
 		ExplosionEnabled:             t.explosionEnabled,
 		ExplosionColor:               t.explosionColor,
 		AlertSoundsEnabled:           t.alertSoundsEnabled,
+		DiscordWebhookURL:            t.discord.WebhookURL,
+		DiscordHHLeadMins:            int(t.discord.HHLead / time.Minute),
+		DiscordNotifications:         t.discord.Notifications.record(),
+		TwitchAnnouncements:          t.twitchAnnouncements.record(),
 		StatIconStyle:                string(t.statIcons.Style),
 		StatIconOutline:              t.statIcons.Outline,
 		StatIconSubs:                 t.statIcons.Subs,

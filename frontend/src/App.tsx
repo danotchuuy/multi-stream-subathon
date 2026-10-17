@@ -4,6 +4,7 @@ import RequireAuth from './RequireAuth'
 import Account from './pages/Account'
 import Dashboard from './pages/Dashboard'
 import GoalsOverlay from './pages/GoalsOverlay'
+import HappyHours from './pages/HappyHours'
 import History from './pages/History'
 import Login from './pages/Login'
 import Overlay from './pages/Overlay'
@@ -64,6 +65,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <Rewards />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/t/:timerId/happy-hours"
+            element={
+              <RequireAuth>
+                <HappyHours />
               </RequireAuth>
             }
           />

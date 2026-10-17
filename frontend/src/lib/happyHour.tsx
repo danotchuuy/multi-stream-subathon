@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import type { HappyHourAnimationStyle, HappyHourStyle } from '../types'
+import { formatDuration } from './format'
 
 /** Mirrors subathon.DefaultHappyHourStyle, used before a Snapshot (which
  * always carries the server's actual style, customized or not) has
@@ -73,7 +74,10 @@ function formatMultiplier(multiplier: number): string {
 /**
  * Wraps the main overlay's pill group with its happy hour animation (see
  * Snapshot.happyHourStyle) while active — or renders children untouched
- * while not. Pure CSS animation (see index.css's .overlay-hh-* rules);
+ * while not. secondsLeft, when given, is shown in the badge as how much
+ * longer the happy hour runs; callers recompute it from
+ * Snapshot.boostEndsAt on each render, which the once-a-second snapshot
+ * broadcast keeps ticking without a timer of its own here. Pure CSS animation (see index.css's .overlay-hh-* rules);
  * shared by Overlay.tsx and Styling.tsx's preview so both render the
  * exact same markup.
  */
@@ -81,11 +85,13 @@ export function HappyHourWrap({
   active,
   happyHourStyle,
   multiplier,
+  secondsLeft,
   children,
 }: {
   active: boolean
   happyHourStyle: HappyHourStyle
   multiplier: number
+  secondsLeft?: number
   children: React.ReactNode
 }) {
   const sparkles = useMemo(() => buildSparkles(), [])
@@ -108,6 +114,9 @@ export function HappyHourWrap({
       {showBadge && (
         <div className="overlay-hh-badge">
           🔥 {formatMultiplier(multiplier)} HAPPY HOUR
+          {secondsLeft !== undefined && (
+            <span className="overlay-hh-badge-time">{formatDuration(secondsLeft)}</span>
+          )}
         </div>
       )}
       {style === 'sparkles' && (

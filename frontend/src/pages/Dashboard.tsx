@@ -5,6 +5,7 @@ import {
   addManualEvent,
   addModerator,
   disconnectStreamElements,
+  endHappyHour,
   endSubathon,
   getModerators,
   getMoneyMilestones,
@@ -27,13 +28,14 @@ import {
   setTwitchChannel,
   setYouTubeChannel,
   startHappyHour,
+  validHappyHourMultiplier,
   stopSubathon,
   streamElementsOAuthStartUrl,
   unendSubathon,
   unhideSubathon,
   unlockSubathon,
 } from '../lib/api'
-import { formatDuration, formatMoney } from '../lib/format'
+import { formatDuration, formatMoney, secondsUntil } from '../lib/format'
 import type {
   Moderator,
   MoneyMilestone,
@@ -604,9 +606,9 @@ function AddDonationForm({ timerId }: { timerId: string }) {
         Happy hour multiplier
         <input
           type="number"
-          min={1.1}
+          min={1}
           max={10}
-          step={0.5}
+          step="any"
           value={happyHourMultiplier}
           disabled={!happyHour}
           onChange={(e) => {
@@ -1000,42 +1002,35 @@ function ModeratorsSection({
   )
 }
 
-/** Returns how many whole seconds remain until isoTime, floored at 0 for
- * a timestamp already in the past (e.g. a stale snapshot the next
- * websocket tick hasn't overwritten yet). */
-function secondsUntil(isoTime: string): number {
-  return Math.max(0, (new Date(isoTime).getTime() - Date.now()) / 1000)
-}
-
-/** Whether multiplier is one the server accepts for a happy hour (more
- * than 1×, at most 10×). */
-function validHappyHourMultiplier(multiplier: number): boolean {
-  return multiplier > 1 && multiplier <= 10
-}
-
 /** "Start Happy Hour" control: the dashboard's equivalent of a channel
  * moderator's "!timer hh <duration> [multiplier]" chat command —
  * multiplies time contributions (2× by default) for a chosen duration and announces it in that timer's
  * Twitch chat using the streamer's own account (see api.startHappyHour).
  * boostActive/boostEndsAt come straight off the live snapshot, which
  * ticks every second, so the "ends in ..." countdown here updates on its
- * own without a separate timer. */
+ * own without a separate timer. While one is active — however it was
+ * started, scheduled or not — the control swaps to "End Happy Hour"
+ * instead of letting a second one replace it. */
 function HappyHourForm({
+  timerId,
   minutes,
   onMinutesChange,
   multiplier,
   onMultiplierChange,
   onStart,
+  onEnd,
   busy,
   boostActive,
   boostEndsAt,
   boostMultiplier,
 }: {
+  timerId: string
   minutes: number
   onMinutesChange: (minutes: number) => void
   multiplier: number
   onMultiplierChange: (multiplier: number) => void
   onStart: () => Promise<void>
+  onEnd: () => Promise<void>
   busy: boolean
   boostActive: boolean
   boostEndsAt?: string
@@ -1053,31 +1048,42 @@ function HappyHourForm({
             : 'Multiplies time contributions for a limited window, announced in Twitch chat'}
         </span>
       </div>
-      <div className="control-inline">
-        <label>
-          Minutes
-          <input
-            type="number"
-            min={1}
-            value={minutes}
-            onChange={(e) => onMinutesChange(Number(e.target.value))}
-          />
-        </label>
-        <label>
-          Multiplier
-          <input
-            type="number"
-            min={1.1}
-            max={10}
-            step={0.5}
-            value={multiplier}
-            onChange={(e) => onMultiplierChange(Number(e.target.value))}
-          />
-        </label>
-        <button onClick={onStart} disabled={busy || !validHappyHourMultiplier(multiplier)}>
-          Start Happy Hour
-        </button>
-      </div>
+      {boostActive ? (
+        <div className="control-inline">
+          <button onClick={onEnd} disabled={busy}>
+            End Happy Hour
+          </button>
+        </div>
+      ) : (
+        <div className="control-inline">
+          <label>
+            Minutes
+            <input
+              type="number"
+              min={1}
+              value={minutes}
+              onChange={(e) => onMinutesChange(Number(e.target.value))}
+            />
+          </label>
+          <label>
+            Multiplier
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step="any"
+              value={multiplier}
+              onChange={(e) => onMultiplierChange(Number(e.target.value))}
+            />
+          </label>
+          <button onClick={onStart} disabled={busy || !validHappyHourMultiplier(multiplier)}>
+            Start Happy Hour
+          </button>
+        </div>
+      )}
+      <Link to={`/t/${timerId}/happy-hours`} className="control-hint">
+        Schedule Happy Hours &amp; set up Discord announcements &rarr;
+      </Link>
     </div>
   )
 }
@@ -1197,6 +1203,18 @@ export default function Dashboard() {
     }
   }
 
+  const handleEndHappyHour = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await endHappyHour(timerId)
+    } catch (err) {
+      setError(controlErrorMessage(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   // Removes a contribution from the recent-contributors list, reversing
   // its effect on the clock/money total server-side (see
   // Timer.RemoveEvent) — e.g. for a mistaken or fraudulent entry. Tracks
@@ -1282,6 +1300,9 @@ export default function Dashboard() {
         </Link>
         <Link to={`/t/${timerId}/styling`} className="back-link">
           Timer styling
+        </Link>
+        <Link to={`/t/${timerId}/happy-hours`} className="back-link">
+          Happy Hours
         </Link>
         <span className={`status ${connected ? 'status-ok' : 'status-down'}`}>
           {connected ? 'connected' : 'disconnected'}
@@ -1442,11 +1463,13 @@ export default function Dashboard() {
             </div>
           </div>
           <HappyHourForm
+            timerId={timerId}
             minutes={happyHourMinutes}
             onMinutesChange={setHappyHourMinutes}
             multiplier={happyHourMultiplier}
             onMultiplierChange={setHappyHourMultiplier}
             onStart={handleStartHappyHour}
+            onEnd={handleEndHappyHour}
             busy={busy}
             boostActive={snapshot?.boostActive ?? false}
             boostEndsAt={snapshot?.boostEndsAt}
@@ -1530,6 +1553,7 @@ export default function Dashboard() {
                 <StreamElementsForm timerId={timerId} />
             </>
           )}
+
           <ModeratorsSection timerId={timerId} isOwner={isOwner} />
         </div>
       </section>

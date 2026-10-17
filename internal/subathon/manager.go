@@ -48,7 +48,11 @@ func NewManager(repo Repo) (*Manager, error) {
 		if err != nil {
 			return nil, fmt.Errorf("load moderators for timer %s: %w", rec.ID, err)
 		}
-		m.timers[rec.ID] = newTimer(repo, rec, events, moderatorIDs)
+		scheduled, err := repo.ScheduledHappyHours(rec.ID)
+		if err != nil {
+			return nil, fmt.Errorf("load scheduled happy hours for timer %s: %w", rec.ID, err)
+		}
+		m.timers[rec.ID] = newTimer(repo, rec, events, moderatorIDs, scheduled)
 	}
 	return m, nil
 }
@@ -111,7 +115,7 @@ func (m *Manager) Create(userID, name string) (*Timer, error) {
 		return nil, fmt.Errorf("create timer: %w", err)
 	}
 
-	t := newTimer(m.repo, rec, nil, nil)
+	t := newTimer(m.repo, rec, nil, nil, nil)
 
 	m.mu.Lock()
 	m.timers[rec.ID] = t

@@ -70,6 +70,10 @@ type TimerRecord struct {
 	// by, e.g. 2 for double time. Values <= 1 are treated as
 	// DefaultBoostMultiplier.
 	BoostMultiplier float64
+	// BoostStartedAt/HHAddedSecs/HHBonusSecs back Timer.HappyHourTally.
+	BoostStartedAt time.Time
+	HHAddedSecs    int
+	HHBonusSecs    int
 
 	// HappyHourAnimation* customize the main overlay's animation while a
 	// time boost is active (see Timer.SetHappyHourStyle). Empty style/
@@ -112,6 +116,23 @@ type TimerRecord struct {
 	// Timer.SetExplosionColor). Empty means not yet customized — callers
 	// layer DefaultExplosionColor on top.
 	ExplosionColor string
+
+	// DiscordWebhookURL is where happy hour announcements are posted (see
+	// Timer.SetDiscordSettings) — a secret, empty if none is set.
+	// DiscordHHLeadMins is how many minutes before a scheduled happy hour
+	// the "starting soon" announcement goes out (0 = none).
+	// DiscordNotifications is the JSON-encoded DiscordNotifications
+	// (empty for a timer saved before they existed).
+	// DiscordPingEveryone is the one @everyone toggle from before
+	// per-notification settings — read only, to migrate from.
+	DiscordWebhookURL    string
+	DiscordHHLeadMins    int
+	DiscordNotifications string
+	DiscordPingEveryone  bool
+
+	// TwitchAnnouncements is the JSON-encoded TwitchAnnouncements (empty
+	// for a timer saved before they were customizable).
+	TwitchAnnouncements string
 
 	// AlertSoundsEnabled turns on the main overlay's countdown alert
 	// chime, played (client-side) once each time RemainingSecs crosses
@@ -215,6 +236,22 @@ type Repo interface {
 
 	// SaveMilestoneAlerts replaces timerID's alert list wholesale.
 	SaveMilestoneAlerts(timerID string, alerts []MilestoneAlert) error
+
+	// ScheduledHappyHours returns timerID's pending happy hours (see
+	// Timer.ScheduleHappyHour), in no particular order. Implementations
+	// return an empty (not nil-erroring) slice if none are pending.
+	ScheduledHappyHours(timerID string) ([]ScheduledHappyHour, error)
+
+	// InsertScheduledHappyHour records a newly scheduled happy hour.
+	InsertScheduledHappyHour(timerID string, s ScheduledHappyHour) error
+
+	// MarkScheduledHappyHourAnnounced records that a pending happy hour's
+	// "starting soon" announcement has gone out, so it isn't repeated.
+	MarkScheduledHappyHourAnnounced(timerID, id string) error
+
+	// DeleteScheduledHappyHour removes a pending happy hour once it's
+	// started or been cancelled. Not an error if no such one exists.
+	DeleteScheduledHappyHour(timerID, id string) error
 
 	// ListModerators returns the user IDs of every account with moderator
 	// access to timerID (not including its owner).

@@ -73,6 +73,10 @@ export interface Snapshot {
   /** Bumps whenever the countdown alert list is saved — see Overlay's
    * useMilestoneAlertSounds. */
   alertsVersion?: number
+  /** Bumps whenever a scheduled happy hour is added, cancelled, or
+   * starts — see the dashboard's ScheduledHappyHours. The list itself is
+   * owner/moderator-only, not part of this public snapshot. */
+  happyHourScheduleVersion?: number
   /** While true, this timer no longer receives live platform events
    * (Twitch/Kick/StreamElements) or responds to any "!timer ..." chat
    * command — only reachable from the dashboard, never chat. Manual
@@ -323,6 +327,95 @@ export interface Me {
 }
 
 export type HappyHourAnimationStyle = 'glow' | 'rainbow' | 'sparkles' | 'pulse'
+
+/** Mirrors subathon.HappyHourTrigger: start at a date/time, or once the
+ * countdown reaches a mark. */
+export type HappyHourTrigger = 'at' | 'remaining'
+
+/** Mirrors subathon.ScheduledHappyHour — a happy hour queued to start
+ * later. startAt (ISO timestamp) is set for trigger 'at', remainingSecs
+ * for 'remaining'. */
+export interface ScheduledHappyHour {
+  id: string
+  trigger: HappyHourTrigger
+  startAt?: string
+  remainingSecs?: number
+  durationSecs: number
+  multiplier: number
+  /** Whether its Discord "starting soon" announcement has gone out. */
+  announced: boolean
+  createdAt: string
+}
+
+/** Mirrors subathon.DiscordNotifications' keys: the heads-up before a
+ * scheduled happy hour, and the start/end of any happy hour. */
+export type NotificationKind = 'headsUp' | 'start' | 'end'
+
+/** Mirrors subathon.DiscordNotification: one kind of announcement's
+ * settings. template '' means the server's default text. */
+export interface DiscordNotification {
+  enabled: boolean
+  pingEveryone: boolean
+  template: string
+}
+
+export type DiscordNotifications = Record<NotificationKind, DiscordNotification>
+
+/** A {placeholder} an announcement's template can use. */
+export interface TemplatePlaceholder {
+  key: string
+  description: string
+}
+
+/** A timer's Discord happy hour announcement settings. The webhook URL
+ * itself is a secret and never sent back — only whether one is set. */
+export interface DiscordSettings {
+  configured: boolean
+  /** How many minutes before a scheduled happy hour the heads-up is
+   * posted. */
+  leadMinutes: number
+  notifications: DiscordNotifications
+  /** How Discord labels the webhook's posts, for the preview — absent if
+   * there's no webhook or Discord couldn't be reached. */
+  webhookName?: string
+  webhookAvatarUrl?: string
+  /** Each announcement's built-in text, used while its template is ''. */
+  defaultTemplates: Record<NotificationKind, string>
+  placeholders: Record<NotificationKind, TemplatePlaceholder[]>
+  maxTemplateLength: number
+}
+
+/** Mirrors subathon.TwitchAnnouncement: one Twitch chat happy hour
+ * announcement's settings. template '' means the default text. */
+export interface TwitchAnnouncement {
+  enabled: boolean
+  template: string
+}
+
+/** Mirrors subathon.TwitchAnnouncements — Twitch has no heads-up. */
+export interface TwitchAnnouncements {
+  start: TwitchAnnouncement
+  end: TwitchAnnouncement
+}
+
+/** A timer's Twitch chat happy hour announcement settings. */
+export interface TwitchAnnouncementSettings {
+  /** The Twitch channel they're posted in ('' = none set, nothing is
+   * posted). */
+  channel: string
+  announcements: TwitchAnnouncements
+  defaultTemplates: Record<'start' | 'end', string>
+  placeholders: Record<'start' | 'end', TemplatePlaceholder[]>
+  maxTemplateLength: number
+}
+
+/** One announcement for the Discord channel preview: which kind it is,
+ * when it's posted, and its exact text (Discord markdown included). */
+export interface DiscordPreviewMessage {
+  kind: NotificationKind
+  label: string
+  content: string
+}
 
 /** Mirrors subathon.HappyHourStyle — see Snapshot.happyHourStyle. */
 export interface HappyHourStyle {

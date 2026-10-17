@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -408,12 +409,14 @@ func formatMultiplier(m float64) string {
 // multiplier (see subathon.Timer.StartTimeBoost, capped at maxHHDuration
 // and subathon.MaxBoostMultiplier), announces it in
 // broadcasterID's chat using the timer owner's own Twitch account (see
-// announceAsOwner), and schedules a matching "it's over" announcement for
-// when it expires (see announceTimeBoostEnd) — shared by the "!timer hh
-// <duration>" chat command (handleHHCommand) and the dashboard's "Start
-// Happy Hour" control (handleStartHappyHour). broadcasterID empty (e.g. the
-// timer has no Twitch channel configured) skips both announcements but
-// still starts the boost itself.
+// announceAsOwner) and on the timer's Discord webhook, if set (see
+// postDiscord), and schedules matching "it's over" announcements for when
+// it expires (see announceTimeBoostEnd) — shared by the "!timer hh
+// <duration>" chat command (handleHHCommand), the dashboard's "Start
+// Happy Hour" control (handleStartHappyHour), and scheduled happy hours
+// (RunHappyHourScheduler). broadcasterID empty (e.g. the timer has no
+// Twitch channel configured) skips the Twitch announcements but still
+// starts the boost itself.
 func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.Duration, multiplier float64) error {
 	if d > maxHHDuration {
 		d = maxHHDuration
@@ -425,20 +428,10 @@ func startHappyHour(deps Deps, t *subathon.Timer, broadcasterID string, d time.D
 	endsAt := t.TimeBoostEndsAt()
 	deps.Hub.Broadcast(t.ID(), t.Snapshot())
 
-	if broadcasterID == "" {
-		return nil
-	}
+	m := t.TimeBoostMultiplier()
+	postDiscordNotification(deps, t, notifyStart, startVars(t.Name(), m, d, endsAt))
 
-	minutes := int(d.Round(time.Minute) / time.Minute)
-	var startMessage string
-	if m := t.TimeBoostMultiplier(); m == 2 {
-		startMessage = fmt.Sprintf("⏱️ Happy Hour! Time contributions are DOUBLED for the next %d minutes!", minutes)
-	} else {
-		startMessage = fmt.Sprintf("⏱️ Happy Hour! Time contributions are worth %s for the next %d minutes!", formatMultiplier(m), minutes)
-	}
-	if err := announceAsOwner(deps, t, broadcasterID, startMessage); err != nil {
-		log.Printf("twitch: announce time boost start on timer %s: %v", t.ID(), err)
-	}
+	announceTwitch(deps, t, broadcasterID, notifyStart, twitchStartText(t.TwitchAnnouncements(), t.Name(), m, d))
 
 	// This server process is what's tracking the expiry, so the
 	// announcement is scheduled here rather than resumed on restart — a
@@ -496,7 +489,34 @@ func handleStartHappyHour(deps Deps) http.HandlerFunc {
 	}
 }
 
-// announceTimeBoostEnd announces that a "!timer hh" boost has ended, but
+// handleEndHappyHour is the dashboard's "End Happy Hour" control: ends
+// the active happy hour now — however it was started — and announces
+// that it's over, exactly as if it had run its course. Its originally
+// scheduled end announcement is then skipped (see announceTimeBoostEnd).
+// 409 if none is active.
+func handleEndHappyHour(deps Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		t := timerFromContext(r)
+
+		if err := t.EndTimeBoost(); err != nil {
+			if errors.Is(err, subathon.ErrNoTimeBoost) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			log.Printf("server: end happy hour for timer %s: %v", t.ID(), err)
+			http.Error(w, "failed to end happy hour", http.StatusInternalServerError)
+			return
+		}
+
+		broadcasterID, _ := t.TwitchChannel()
+		announceHappyHourEnded(deps, t, broadcasterID)
+		writeJSON(w, http.StatusOK, t.Snapshot())
+	}
+}
+
+// announceTimeBoostEnd announces that a happy hour has ended — in
+// broadcasterID's Twitch chat (skipped if empty) and on the timer's
+// Discord webhook, if set — but
 // only if expectedEndsAt still matches t's current boost expiry (see
 // Timer.TimeBoostEndsAt) — a later "!timer hh" command before this one's
 // timer fired would have moved that expiry forward, meaning *that*
@@ -506,13 +526,37 @@ func announceTimeBoostEnd(deps Deps, t *subathon.Timer, broadcasterID string, ex
 	if !t.TimeBoostEndsAt().Equal(expectedEndsAt) {
 		return
 	}
+	announceHappyHourEnded(deps, t, broadcasterID)
+}
 
+// announceHappyHourEnded pushes the post-happy-hour snapshot and posts
+// the "it's over" message to Discord and, if broadcasterID isn't empty,
+// Twitch chat — whether it ran its course (announceTimeBoostEnd) or was
+// ended early (handleEndHappyHour).
+func announceHappyHourEnded(deps Deps, t *subathon.Timer, broadcasterID string) {
 	deps.Hub.Broadcast(t.ID(), t.Snapshot())
 
-	message := "⏱️ Happy Hour has ended — time contributions are back to normal."
-	if err := announceAsOwner(deps, t, broadcasterID, message); err != nil {
-		log.Printf("twitch: announce time boost end on timer %s: %v", t.ID(), err)
+	added, bonus := t.HappyHourTally()
+	multiplier := t.TimeBoostMultiplier()
+	postDiscordNotification(deps, t, notifyEnd, endVars(t.Name(), multiplier, added, bonus))
+	announceTwitch(deps, t, broadcasterID, notifyEnd, twitchEndText(t.TwitchAnnouncements(), t.Name(), multiplier, added, bonus))
+}
+
+// twitchHappyHourEndMessage is the default Twitch chat "it's over"
+// announcement (see twitchEndText):
+// how much time the happy hour added (see Timer.HappyHourTally) and a
+// thank-you. The time-added sentence is left out when it added nothing,
+// rather than announcing "0 seconds".
+func twitchHappyHourEndMessage(multiplier float64, added, bonus time.Duration) string {
+	msg := "⏱️ Happy Hour has ended — time contributions are back to normal."
+	if added > 0 {
+		msg += fmt.Sprintf(" It added %s to the timer", humanDuration(added))
+		if bonus > 0 {
+			msg += fmt.Sprintf(" (%s of that from the %s boost)", humanDuration(bonus), formatMultiplier(multiplier))
+		}
+		msg += "."
 	}
+	return msg + " Thank you so much for all the support! 💜"
 }
 
 // tokenRefreshMargin refreshes an about-to-expire Twitch access token this

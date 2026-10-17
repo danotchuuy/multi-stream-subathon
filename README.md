@@ -22,6 +22,8 @@ overlay to display one.
   - [YouTube](#youtube)
   - [StreamElements](#streamelements)
   - [Throne](#throne)
+- [Happy Hours](#happy-hours)
+  - [Announcements](#announcements)
 - [Twitch chat commands](#twitch-chat-commands)
 - [Ending a timer](#ending-a-timer)
 - [Storage](#storage)
@@ -54,6 +56,8 @@ Starts the Go API and the Vite dev server together (Ctrl+C stops both).
 Use `make server` / `make frontend` to run them separately in different
 terminals.
 
+Run the Go tests with `go test ./...`.
+
 Then open `http://localhost:5173/` — you'll be sent to `/login` until you
 sign up with Twitch, Kick, or YouTube.
 
@@ -77,7 +81,7 @@ internal/oauth/        minimal OAuth2 (+ PKCE) client used for login/link; Twitc
 internal/sqlite/       SQLite implementation of both Repo interfaces above
 internal/ws/           WebSocket broadcast hub, scoped per timer ID
 internal/server/       HTTP routes (REST + /ws/{timerId} + /auth/*)
-internal/platform/     one package per streaming platform: Twitch/Kick webhook clients, YouTube's gRPC live chat client, StreamElements' poller
+internal/platform/     one package per external platform: Twitch/Kick webhook clients, YouTube's gRPC live chat client, StreamElements' poller, Discord webhook client (Happy Hour announcements)
 internal/youtubepb/    generated gRPC bindings for YouTube's liveChatMessages.streamList
 frontend/              React + Vite + TypeScript: login, account, timer picker, dashboard, overlay
 ```
@@ -193,6 +197,7 @@ or hit its control endpoints.
 | `/t/<id>/overlay` | the public OBS view |
 | `/t/<id>/history` | full public contribution history (sortable, filterable to one contributor) |
 | `/t/<id>/rewards` | that timer's reward- and money-rule settings (owner or moderator) |
+| `/t/<id>/happy-hours` | that timer's Happy Hour schedule and Discord/Twitch announcement settings (owner or moderator) — see [Happy Hours](#happy-hours) |
 
 ## Reward rules, money rules, and live events
 
@@ -506,6 +511,108 @@ manually-added events (`POST /api/timers/{id}/events`), just not real
 platform activity. Throne is the exception — it works with no
 configuration at all (see [Throne](#throne) above).
 
+## Happy Hours
+
+A **Happy Hour** multiplies the time value of every real contribution
+(2× by default, up to 10×) for a set duration. Manual "Add test event"
+entries aren't multiplied. Only one runs at a time — starting another
+replaces it.
+
+**Starting and ending one.** Start one from the dashboard's Happy Hour
+box (minutes + multiplier), with `!timer hh <duration> [multiplier]` in
+Twitch chat (see [Twitch chat commands](#twitch-chat-commands)), or on a
+schedule (below). While one is running, the dashboard box shows its
+multiplier and time left, and swaps its Start button for **End Happy
+Hour**, which ends it immediately however it was started. Durations are
+capped at 24 hours.
+
+**On the overlay.** While a Happy Hour is running, the main overlay
+animates the timer (glow, rainbow, sparkles, or pulse — customizable on
+`/t/<id>/styling`), and its badge shows the multiplier and a live
+countdown of how much longer it runs.
+
+**Scheduling.** The Happy Hours page (`/t/<id>/happy-hours`) queues
+Happy Hours to start later:
+
+- **At a date & time** — starts then. If the server was down, or the
+  timer was paused, locked, or ended when that time came, it waits and
+  starts once it can — unless it's over 5 minutes late by then, in
+  which case it's dropped rather than starting unexpectedly.
+- **When the timer reaches** a given amount of time left — starts when
+  the countdown crosses that mark. Only a running timer crosses a mark;
+  if the mark is reached while the timer is locked, it's dropped.
+
+A scheduled Happy Hour never starts while the timer is paused or locked.
+Schedules are kept in the database, so they survive restarts. A mark
+the clock is already under can't be scheduled.
+
+**Time added.** While a Happy Hour runs, the timer tallies how much time
+contributions add to the clock and how much of that was the multiplier's
+extra (contributions made while locked don't count, since they don't
+add time; removing one from the dashboard takes it back out). The
+"ended" announcements report it — see below.
+
+### Announcements
+
+Each Happy Hour can be announced in Discord and in Twitch chat, set up
+on the Happy Hours page. Each message type can be turned on or off and
+has editable text with placeholders, and a live preview shows exactly
+how it'll look — built server-side by the same code that sends the real
+ones.
+
+**Discord** posts through a channel webhook (Server Settings →
+Integrations → Webhooks — no bot account needed). Paste its URL into the
+Happy Hours page; it's treated as a secret, never sent back to the
+browser, and only real `https://discord.com/api/webhooks/...` URLs are
+accepted. **Send test** posts a test message (without pinging anyone).
+There are three messages, each of which can optionally **ping
+@everyone** (nothing else in a message can ping):
+
+- **Heads-up** — posted once, a set number of minutes before a
+  *scheduled* Happy Hour, while the timer is running and unlocked. It's
+  never repeated, even if time is added back above the heads-up window.
+- **Started** — when any Happy Hour starts.
+- **Ended** — when any Happy Hour ends, including when it's ended early.
+  The default says how much time it added and thanks viewers for their
+  support.
+
+**Twitch chat** gets the **started** and **ended** messages as chat
+announcements in the timer's Twitch channel, posted from the owner's own
+linked Twitch account. Left at their default text, the start message
+says "DOUBLED" for a 2× Happy Hour and the end message leaves out the
+time-added sentence when nothing came in; custom text is posted as
+written.
+
+| Placeholder | Fills in | Available in |
+| --- | --- | --- |
+| `{multiplier}` | e.g. `2x` | every message |
+| `{duration}` | how long it lasts, e.g. `30 minutes` | heads-up, started |
+| `{when}` | when it starts — a live Discord timestamp for a date & time one, or `in about 10 minutes, when the timer hits 1:00:00` | Discord heads-up |
+| `{ends}` | when it ends, as a live Discord countdown | Discord started |
+| `{time_added}` | total time added to the timer during it | ended |
+| `{bonus_time}` | how much of that was extra from the multiplier | ended |
+| `{timer}` | the timer's name | every message |
+
+Messages are capped at 1000 characters (Discord) / 400 (Twitch) of
+template text; anything that expands past Discord's 2000-character or
+Twitch's 500-character limit is cut short with "…".
+
+| Endpoint | Body / notes |
+| --- | --- |
+| `POST /api/timers/{id}/control/happy-hour` | `{"durationSeconds": 1800, "multiplier": 2}` — start one now |
+| `POST /api/timers/{id}/control/happy-hour/end` | end the running one now; 409 if none is running |
+| `GET/POST /api/timers/{id}/scheduled-happy-hours` | list / add one: `{"trigger": "at", "startAt": "<RFC 3339>", ...}` or `{"trigger": "remaining", "remainingSecs": 3600, ...}`, plus `durationSeconds`/`multiplier` |
+| `DELETE /api/timers/{id}/scheduled-happy-hours/{scheduleId}` | cancel one before it starts |
+| `GET/PUT /api/timers/{id}/discord` | webhook (`webhookUrl`: omit to keep, `""` to remove), heads-up `leadMinutes`, and per-message `notifications` |
+| `POST /api/timers/{id}/discord/preview` | render every Discord message from unsaved settings; sends nothing |
+| `POST /api/timers/{id}/discord/test` | post a test message through the saved webhook |
+| `GET/PUT /api/timers/{id}/twitch-announcements` | per-message Twitch chat settings |
+| `POST /api/timers/{id}/twitch-announcements/preview` | render both Twitch messages from unsaved settings; sends nothing |
+
+All of these are owner or moderator only. The schedule list isn't part
+of the public snapshot, so overlay viewers can't see a surprise Happy
+Hour coming.
+
 ## Twitch chat commands
 
 A timer's own watched Twitch channel's moderators (or its broadcaster)
@@ -519,6 +626,7 @@ own single-word commands in the same chat.
 | `!timer pause` / `!timer play` | `control/stop` / `control/resume` — starts/stops the countdown itself |
 | `!timer lock` / `!timer unlock` | Toggles `Snapshot.locked`: contributions still get recorded (and still count toward `totalMoneyRaised`) but stop extending the clock — freezing the countdown against new contributions without losing track of what came in during the freeze. Independent of pause/play; combine both if wanted. |
 | `!timer hide` / `!timer show` | Toggles `Snapshot.hidden`: the public overlay renders nothing at all while hidden (not just a blank clock) — the dashboard always shows the clock to the owner/moderators regardless. |
+| `!timer hh <duration> [multiplier]` | Starts a [Happy Hour](#happy-hours), e.g. `!timer hh 30m` (2×) or `!timer hh 1h 3x` — same as the dashboard's Start Happy Hour button, announcements included. |
 
 This reads chat via a `channel.chat.message` EventSub subscription,
 created (like Twitch's other subscriptions above) via an app-level token

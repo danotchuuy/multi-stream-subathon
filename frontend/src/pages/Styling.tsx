@@ -17,7 +17,7 @@ import {
   setStatsRotation,
   HttpError,
 } from '../lib/api'
-import { formatCompactCount, formatDuration, formatWholeMoney } from '../lib/format'
+import { formatCompactCount, formatDuration, formatWholeMoney, secondsUntil } from '../lib/format'
 import { ALERT_SOUND_OPTIONS, DEFAULT_ALERT_SOUND, playAlertSound } from '../lib/alertSound'
 import { explosionColorStyle, ExplosionBurst } from '../lib/explosion'
 import { HAPPY_HOUR_ANIMATION_STYLES, HappyHourWrap } from '../lib/happyHour'
@@ -978,6 +978,13 @@ export default function Styling() {
                 active={previewHappyHour && !previewExploding}
                 happyHourStyle={{ ...happyHourStyle, enabled: true }}
                 multiplier={snapshot?.boostActive ? (snapshot.boostMultiplier ?? 2) : 2}
+                // Live time left during a real happy hour, otherwise a
+                // sample hour so the preview shows the badge's countdown.
+                secondsLeft={
+                  snapshot?.boostActive && snapshot.boostEndsAt
+                    ? secondsUntil(snapshot.boostEndsAt)
+                    : 3600
+                }
               >
                 <div
                   className={previewExploding ? 'overlay-explosion-wrap' : undefined}
